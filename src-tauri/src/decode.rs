@@ -102,3 +102,60 @@ pub fn decode_file(path: &Path) -> Result<AudioData> {
     }
     Ok(AudioData { sample_rate, channels })
 }
+
+/// Title, artist, album and embedded cover from a file's tags (ID3, Vorbis comments, …).
+#[derive(Default, Debug)]
+pub struct Tags {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// Encoded image bytes (JPEG/PNG), preferring the front cover.
+    pub cover: Option<Box<[u8]>>,
+}
+
+/// Read tags only: the file is probed, no audio is decoded. Every metadata revision is looked at
+/// (e.g. ID3v2 at the start and ID3v1 at the end of an mp3); the first value found wins.
+pub fn read_tags(path: &Path) -> Result<Tags> {
+    use symphonia::core::meta::{StandardTag, StandardVisualKey};
+
+    let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let mut format = symphonia::default::get_probe()
+        .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
+        .context("unsupported or corrupt audio file")?;
+
+    let mut tags = Tags::default();
+    let mut front_cover = false;
+    let mut metadata = format.metadata();
+    loop {
+        if let Some(rev) = metadata.current() {
+            for tag in &rev.media.tags {
+                let (slot, value) = match &tag.std {
+                    Some(StandardTag::TrackTitle(v)) => (&mut tags.title, v),
+                    Some(StandardTag::Artist(v)) => (&mut tags.artist, v),
+                    Some(StandardTag::Album(v)) => (&mut tags.album, v),
+                    _ => continue,
+                };
+                let value = value.trim();
+                if slot.is_none() && !value.is_empty() {
+                    *slot = Some(value.to_owned());
+                }
+            }
+            for visual in &rev.media.visuals {
+                let is_front = visual.usage == Some(StandardVisualKey::FrontCover);
+                if !visual.data.is_empty() && (tags.cover.is_none() || (is_front && !front_cover)) {
+                    tags.cover = Some(visual.data.clone());
+                    front_cover = is_front;
+                }
+            }
+        }
+        if metadata.pop().is_none() {
+            break;
+        }
+    }
+    Ok(tags)
+}

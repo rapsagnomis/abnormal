@@ -4,7 +4,7 @@
 //! Indexing runs in the background at startup and only analyses files that are new or changed
 //! since the last run (by size and modification time); entries for deleted files are dropped.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -23,6 +23,10 @@ const EXTENSIONS: [&str; 3] = ["mp3", "flac", "wav"];
 const MAX_WORKERS: usize = 4;
 /// Save progress at least this often, so quitting mid-index loses little work.
 const SAVE_EVERY_SECONDS: u64 = 20;
+/// Album art is kept as thumbnails this big (px, longest side), shown at ~30 px.
+const COVER_SIZE: u32 = 128;
+/// Image files next to the audio used as album art when the file has none embedded.
+const FOLDER_COVERS: [&str; 6] = ["cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.png", "front.jpg"];
 
 /// A few headline numbers per track, shown next to matches.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -34,6 +38,16 @@ pub struct Summary {
     pub correlation: Option<f64>,
 }
 
+/// What the UI shows for a track. Read once per file; all `None` when the file has no tags.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct Meta {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    /// File name of the album art thumbnail in the covers folder.
+    cover: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Entry {
     size: u64,
@@ -43,6 +57,10 @@ struct Entry {
     summary: Option<Summary>,
     /// Why the file couldn't be analysed; kept so it isn't retried until it changes.
     error: Option<String>,
+    /// Tags, read separately from the analysis (so adding them didn't need a re-analysis);
+    /// `None` until read.
+    #[serde(default)]
+    meta: Option<Meta>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -74,6 +92,14 @@ pub struct LibraryTrack {
     pub rel_path: String,
     pub duration: f64,
     pub summary: Option<Summary>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// Absolute path of the album art thumbnail.
+    pub cover: Option<String>,
+    /// Other files with the same audio (the same song kept in several folders); only this one
+    /// is listed.
+    pub copies: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -94,6 +120,8 @@ pub type Notify<'a> = &'a (dyn Fn(&Status) + Sync);
 pub struct Library {
     root: PathBuf,
     db_path: PathBuf,
+    /// Album art thumbnails, named by a hash of the original image so an album's share one.
+    covers_dir: PathBuf,
     db: Mutex<Db>,
     status: Mutex<Status>,
 }
@@ -106,7 +134,8 @@ impl Library {
             .filter(|db| db.version == DB_VERSION)
             .unwrap_or(Db { version: DB_VERSION, tracks: HashMap::new() });
         let status = Status { root: root.to_string_lossy().into_owned(), ..Default::default() };
-        let lib = Library { root, db_path, db: Mutex::new(db), status: Mutex::new(status) };
+        let covers_dir = db_path.with_file_name("covers");
+        let lib = Library { root, db_path, covers_dir, db: Mutex::new(db), status: Mutex::new(status) };
         lib.refresh_counts();
         lib
     }
@@ -170,38 +199,79 @@ impl Library {
         };
         self.refresh_counts();
         self.update(notify, |s| s.queued = todo.len());
-        if todo.is_empty() {
-            return self.save();
-        }
 
-        let next = AtomicUsize::new(0);
         let last_save = Mutex::new(Instant::now());
-        let workers = std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).clamp(1, MAX_WORKERS));
-        std::thread::scope(|scope| {
-            for _ in 0..workers {
-                scope.spawn(|| {
-                    loop {
-                        let i = next.fetch_add(1, Ordering::Relaxed);
-                        let Some((path, size, modified)) = todo.get(i) else { break };
-                        let entry = analyze_file(path, *size, *modified);
-                        let ok = entry.features.is_some();
-                        self.db.lock().unwrap().tracks.insert(key(path), entry);
-                        self.update(notify, |s| {
-                            s.done += 1;
-                            if ok { s.indexed += 1 } else { s.failed += 1 }
-                        });
-                        let mut last = last_save.lock().unwrap();
-                        if last.elapsed().as_secs() >= SAVE_EVERY_SECONDS {
-                            if let Err(e) = self.save() {
-                                eprintln!("library: {e}");
-                            }
-                            *last = Instant::now();
-                        }
-                    }
-                });
+        for_each_parallel(&todo, |(path, size, modified)| {
+            let mut entry = analyze_file(path, *size, *modified);
+            let ok = entry.features.is_some();
+            if ok {
+                entry.meta = Some(self.read_meta(path));
             }
+            self.db.lock().unwrap().tracks.insert(key(path), entry);
+            self.update(notify, |s| {
+                s.done += 1;
+                if ok { s.indexed += 1 } else { s.failed += 1 }
+            });
+            self.save_every(&last_save);
         });
+        self.read_missing_tags(&last_save);
         self.save()
+    }
+
+    /// Tags for analysed tracks indexed before tags were read. Only the tags are read (no
+    /// decoding), so this is quick even for the whole library.
+    fn read_missing_tags(&self, last_save: &Mutex<Instant>) {
+        let missing: Vec<String> = {
+            let db = self.db.lock().unwrap();
+            db.tracks.iter().filter(|(_, e)| e.features.is_some() && e.meta.is_none()).map(|(p, _)| p.clone()).collect()
+        };
+        for_each_parallel(&missing, |path| {
+            let meta = self.read_meta(Path::new(path));
+            if let Some(e) = self.db.lock().unwrap().tracks.get_mut(path) {
+                e.meta = Some(meta);
+            }
+            self.save_every(last_save);
+        });
+    }
+
+    fn read_meta(&self, path: &Path) -> Meta {
+        let tags = decode::read_tags(path).unwrap_or_default();
+        let image = tags.cover.map(Vec::from).or_else(|| folder_cover(path));
+        Meta { title: tags.title, artist: tags.artist, album: tags.album, cover: image.and_then(|bytes| self.save_cover(&bytes)) }
+    }
+
+    /// Store a thumbnail of an encoded image, returning its file name; an album's tracks carry
+    /// the same image, so it is only resized once.
+    fn save_cover(&self, bytes: &[u8]) -> Option<String> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut h);
+        let name = format!("{:016x}.jpg", h.finish());
+        let path = self.covers_dir.join(&name);
+        if path.exists() {
+            return Some(name);
+        }
+        let thumb = image::load_from_memory(bytes).ok()?.thumbnail(COVER_SIZE, COVER_SIZE).to_rgb8();
+        std::fs::create_dir_all(&self.covers_dir).ok()?;
+        // Write then rename: two workers may be saving the same album's cover.
+        let tmp = path.with_extension(format!("{:?}.tmp", std::thread::current().id()).replace(['(', ')'], ""));
+        let file = std::fs::File::create(&tmp).ok()?;
+        let encoded = image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 85).encode_image(&thumb);
+        if encoded.is_err() || std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return None;
+        }
+        Some(name)
+    }
+
+    fn save_every(&self, last_save: &Mutex<Instant>) {
+        let mut last = last_save.lock().unwrap();
+        if last.elapsed().as_secs() >= SAVE_EVERY_SECONDS {
+            if let Err(e) = self.save() {
+                eprintln!("library: {e}");
+            }
+            *last = Instant::now();
+        }
     }
 
     fn save(&self) -> Result<(), String> {
@@ -215,57 +285,109 @@ impl Library {
         std::fs::rename(&tmp, &self.db_path).map_err(|e| format!("cannot save library: {e}"))
     }
 
-    /// Library tracks closest to `features`, best first. `weights` balance tonal, dynamics and
+    /// Library tracks closest to `features`, best first, one per song (copies are folded in).
+    /// Copies of the `exclude`d files are left out too. `weights` balance tonal, dynamics and
     /// stereo distances.
     pub fn similar(&self, features: &Features, exclude: &[String], weights: [f64; 3], limit: usize) -> Vec<Match> {
         let db = self.db.lock().unwrap();
+        let copies = copies(&db);
+        let excluded: HashSet<u64> = exclude.iter().filter_map(|p| Some(db.tracks.get(p)?.features.as_ref()?.identity())).collect();
         let spread = Spread::of(db.tracks.values().filter_map(|e| e.features.as_ref()));
-        let mut matches: Vec<Match> = db
+        let mut seen = HashSet::new();
+        let mut scored: Vec<(&String, &Entry, f64, [Option<f64>; 3])> = db
             .tracks
             .iter()
-            .filter(|(path, _)| !exclude.contains(path))
             .filter_map(|(path, e)| {
-                let d = similarity::distances(features, e.features.as_ref()?, &spread);
+                let f = e.features.as_ref()?;
+                if exclude.contains(path) || excluded.contains(&f.identity()) {
+                    return None;
+                }
+                let d = similarity::distances(features, f, &spread);
                 let total = similarity::combine(&d, &weights)?;
-                let [tonal, dynamics, stereo] = d.map(|d| d.map(similarity::score));
-                Some(Match { track: self.track(path, e), score: similarity::score(total), tonal, dynamics, stereo })
+                Some((path, e, similarity::score(total), d.map(|d| d.map(similarity::score))))
             })
             .collect();
-        matches.sort_by(|a, b| b.score.total_cmp(&a.score));
-        matches.truncate(limit);
-        matches
+        // Copies score the same; the path tie-break keeps the choice stable.
+        scored.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(b.0)));
+        scored
+            .into_iter()
+            .filter(|(_, e, ..)| seen.insert(e.features.as_ref().unwrap().identity()))
+            .take(limit)
+            .map(|(path, e, score, [tonal, dynamics, stereo])| Match { track: self.track(path, e, &copies), score, tonal, dynamics, stereo })
+            .collect()
     }
 
     /// Analysed tracks whose path below the root contains every word of `query` (any case),
-    /// sorted by path.
+    /// sorted by path, one per song: of several copies, the first matching one is listed.
     pub fn search(&self, query: &str, limit: usize) -> Vec<LibraryTrack> {
         let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
         let db = self.db.lock().unwrap();
-        let mut found: Vec<LibraryTrack> = db
+        let copies = copies(&db);
+        let mut found: Vec<(&String, &Entry, String)> = db
             .tracks
             .iter()
             .filter(|(_, e)| e.features.is_some())
-            .map(|(path, e)| self.track(path, e))
-            .filter(|t| {
-                let rel = t.rel_path.to_lowercase();
-                words.iter().all(|w| rel.contains(w.as_str()))
+            .map(|(path, e)| (path, e, self.rel_path(path)))
+            .filter(|(_, e, rel)| {
+                // Match the path and the tags, so "artist title" finds files named otherwise.
+                let mut text = rel.to_lowercase();
+                if let Some(m) = &e.meta {
+                    for v in [&m.title, &m.artist, &m.album].into_iter().flatten() {
+                        text.push('\n');
+                        text.push_str(&v.to_lowercase());
+                    }
+                }
+                words.iter().all(|w| text.contains(w.as_str()))
             })
             .collect();
-        found.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-        found.truncate(limit);
+        found.sort_by(|a, b| a.2.cmp(&b.2));
+        let mut seen = HashSet::new();
         found
+            .into_iter()
+            .filter(|(_, e, _)| seen.insert(e.features.as_ref().unwrap().identity()))
+            .take(limit)
+            .map(|(path, e, _)| self.track(path, e, &copies))
+            .collect()
     }
 
-    fn track(&self, path: &str, e: &Entry) -> LibraryTrack {
+    fn rel_path(&self, path: &str) -> String {
+        Path::new(path)
+            .strip_prefix(&self.root)
+            .map_or_else(|_| path.to_owned(), |p| p.to_string_lossy().into_owned())
+    }
+
+    fn track(&self, path: &str, e: &Entry, copies: &HashMap<u64, Vec<&str>>) -> LibraryTrack {
+        let others = e
+            .features
+            .as_ref()
+            .and_then(|f| copies.get(&f.identity()))
+            .map_or_else(Vec::new, |group| group.iter().filter(|p| **p != path).map(|p| (*p).to_owned()).collect());
+        let meta = e.meta.clone().unwrap_or_default();
         LibraryTrack {
-            rel_path: Path::new(path)
-                .strip_prefix(&self.root)
-                .map_or_else(|_| path.to_owned(), |p| p.to_string_lossy().into_owned()),
+            rel_path: self.rel_path(path),
             path: path.to_owned(),
             duration: e.duration,
             summary: e.summary.clone(),
+            title: meta.title,
+            artist: meta.artist,
+            album: meta.album,
+            cover: meta.cover.map(|name| self.covers_dir.join(name).to_string_lossy().into_owned()),
+            copies: others,
         }
     }
+}
+
+/// Paths of analysed files grouped by identical audio, sorted; only groups of two or more.
+fn copies(db: &Db) -> HashMap<u64, Vec<&str>> {
+    let mut groups: HashMap<u64, Vec<&str>> = HashMap::new();
+    for (path, e) in &db.tracks {
+        if let Some(f) = &e.features {
+            groups.entry(f.identity()).or_default().push(path);
+        }
+    }
+    groups.retain(|_, g| g.len() > 1);
+    groups.values_mut().for_each(|g| g.sort_unstable());
+    groups
 }
 
 fn key(path: &Path) -> String {
@@ -302,8 +424,29 @@ fn is_audio(path: &Path) -> bool {
         .is_some_and(|e| EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
+/// Run `f` on every item using a few worker threads.
+fn for_each_parallel<T: Sync>(items: &[T], f: impl Fn(&T) + Sync) {
+    let next = AtomicUsize::new(0);
+    let workers = std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).clamp(1, MAX_WORKERS));
+    std::thread::scope(|scope| {
+        for _ in 0..workers.min(items.len()) {
+            scope.spawn(|| {
+                while let Some(item) = items.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    f(item);
+                }
+            });
+        }
+    });
+}
+
+/// A cover image saved next to the audio file (Deemix writes `cover.jpg` per album).
+fn folder_cover(path: &Path) -> Option<Vec<u8>> {
+    let dir = path.parent()?;
+    FOLDER_COVERS.iter().find_map(|name| std::fs::read(dir.join(name)).ok())
+}
+
 fn analyze_file(path: &Path, size: u64, modified: u64) -> Entry {
-    let failed = |error: String| Entry { size, modified, duration: 0.0, features: None, summary: None, error: Some(error) };
+    let failed = |error: String| Entry { size, modified, duration: 0.0, features: None, summary: None, error: Some(error), meta: None };
     let audio = match decode::decode_file(path) {
         Ok(a) => a,
         Err(e) => return failed(format!("{e:#}")),
@@ -321,6 +464,7 @@ fn analyze_file(path: &Path, size: u64, modified: u64) -> Entry {
             }),
             features: Some(r.features),
             error: None,
+            meta: None,
         },
         Err(e) => failed(e),
     }

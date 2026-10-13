@@ -1,12 +1,22 @@
 import { SLOT_LABELS, SLOTS } from "../lib/api";
 import type { Slot } from "../lib/api";
 
-/** "Load A" / "Load B" for a file; shows "In A" when it's the loaded track. */
-export function LoadButtons({ path, paths, onLoad }: { path: string; paths: [string | null, string | null]; onLoad: (slot: Slot, path: string) => void }) {
+/** "Load A" / "Load B" for a file; shows "In A" when it, or one of its `copies`, is loaded. */
+export function LoadButtons({
+  path,
+  copies = [],
+  paths,
+  onLoad,
+}: {
+  path: string;
+  copies?: string[];
+  paths: [string | null, string | null];
+  onLoad: (slot: Slot, path: string) => void;
+}) {
   return (
     <>
       {SLOTS.map((slot) => {
-        const loaded = paths[slot] === path;
+        const loaded = paths[slot] === path || copies.includes(paths[slot] ?? "");
         const label = SLOT_LABELS[slot];
         return (
           <button

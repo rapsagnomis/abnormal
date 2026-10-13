@@ -794,12 +794,27 @@ kbd {
   margin: 0;
   padding: 0;
 }
+/* Cover | title, album… | load buttons; matches lead with their score. */
 .match {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: start;
   gap: 8px;
   padding: 6px 0;
+}
+.match.scored {
+  grid-template-columns: 30px 30px minmax(0, 1fr) auto;
+}
+.match .cover {
+  width: 30px;
+  height: 30px;
+  border-radius: 4px;
+  background: var(--panel-raised);
+  object-fit: cover;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  font-size: 14px;
 }
 .match + .match {
   border-top: 1px solid rgba(255, 255, 255, 0.04);
@@ -840,9 +855,6 @@ kbd {
 }
 .match-load button.on {
   border-color: currentColor;
-}
-.match.no-score {
-  grid-template-columns: minmax(0, 1fr) auto;
 }
 .library-search {
   width: 100%;
@@ -889,13 +901,6 @@ kbd {
 }
 .deezer-login .chart-note {
   margin: 0;
-}
-.deezer-row .cover {
-  width: 30px;
-  height: 30px;
-  border-radius: 4px;
-  background: var(--panel-raised);
-  object-fit: cover;
 }
 .match-load .download {
   padding: 1px 7px;

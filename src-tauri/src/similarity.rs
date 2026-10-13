@@ -37,6 +37,20 @@ pub struct Features {
 }
 
 impl Features {
+    /// Hash of the exact values. Copies of the same audio (same file in several folders, or
+    /// re-tagged) decode identically and so share it; different recordings practically never do.
+    pub fn identity(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for group in [&self.tonal, &self.dynamics, &self.stereo] {
+            group.len().hash(&mut h);
+            for v in group {
+                v.map(f32::to_bits).hash(&mut h);
+            }
+        }
+        h.finish()
+    }
+
     pub fn new(loudness: &LoudnessStats, dynamics: &DynamicsStats, spectrum: &SpectrumReport, stereo: &StereoStats) -> Self {
         let points: Vec<f64> = (TONAL_FIRST..=TONAL_LAST.min(spectrum.level.len() - 1))
             .step_by(TONAL_STEP)

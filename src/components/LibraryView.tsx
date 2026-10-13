@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { api, SLOT_LABELS, SLOTS } from "../lib/api";
 import type { AnalysisReport, LibraryMatch, LibraryStatus, LibraryTrack, MatchWeights, Slot } from "../lib/api";
 import { formatTime } from "../lib/format";
@@ -203,10 +204,13 @@ function LibraryLine({ status, onRescan }: { status: LibraryStatus | null; onRes
 
 /** A library track with load buttons; with `match`, also its similarity scores. */
 function TrackRow({ track: t, match: m, paths, onLoad }: { track: LibraryTrack; match?: LibraryMatch; paths: Props["paths"]; onLoad: Props["onLoad"] }) {
+  // Tags when the file has them, else the file name and its folder.
   const parts = t.relPath.split("/");
-  const title = parts[parts.length - 1].replace(/\.[^.]+$/, "");
-  const album = parts.slice(0, -1).join(" / ");
+  const fileName = parts[parts.length - 1].replace(/\.[^.]+$/, "");
+  const name = t.title ? (t.artist ? `${t.title} – ${t.artist}` : t.title) : fileName;
+  const album = t.title ? (t.album ?? "") : parts.slice(0, -1).join(" / ");
   const s = t.summary;
+  const copies = t.copies.length;
   const aspects: [string, number | null][] = m
     ? [
         ["tonal", m.tonal],
@@ -215,14 +219,16 @@ function TrackRow({ track: t, match: m, paths, onLoad }: { track: LibraryTrack; 
       ]
     : [];
   return (
-    <li className={`match${m ? "" : " no-score"}`} title={t.path}>
+    <li className={`match${m ? " scored" : ""}`} title={[t.path, ...t.copies].join("\n")}>
       {m && <span className="match-score">{Math.round(m.score)}</span>}
+      {t.cover ? <img className="cover" src={convertFileSrc(t.cover)} alt="" loading="lazy" /> : <span className="cover" aria-hidden="true">♪</span>}
       <div className="match-body">
-        <div className="match-title">{title}</div>
+        <div className="match-title">{name}</div>
         <div className="match-album">
           {album}
           {album && " · "}
           {formatTime(t.duration, 0)}
+          {copies > 0 && ` · ${copies + 1} copies`}
         </div>
         <div className="match-detail">
           {aspects.map(([name, v]) => (
@@ -238,7 +244,7 @@ function TrackRow({ track: t, match: m, paths, onLoad }: { track: LibraryTrack; 
         </div>
       </div>
       <div className="match-load">
-        <LoadButtons path={t.path} paths={paths} onLoad={onLoad} />
+        <LoadButtons path={t.path} copies={t.copies} paths={paths} onLoad={onLoad} />
       </div>
     </li>
   );

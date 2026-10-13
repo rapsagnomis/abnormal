@@ -148,12 +148,21 @@ impl Deemix {
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<DeezerTrack>, String> {
         let mut guard = self.server.lock().unwrap();
         let server = self.running(&mut guard)?;
-        let nb = limit.to_string();
+        // Ask for extra: the same recording often comes back once per release it's on.
+        let nb = (limit * 2).to_string();
         let found = get(server, "search", &[("term", query), ("type", "track"), ("start", "0"), ("nb", &nb)])?;
         if let Some(e) = found["error"].as_str().filter(|e| !e.is_empty()) {
             return Err(format!("Deezer search failed: {e}"));
         }
-        Ok(found["data"].as_array().map_or_else(Vec::new, |tracks| tracks.iter().filter_map(deezer_track).collect()))
+        let mut tracks: Vec<DeezerTrack> = Vec::new();
+        for t in found["data"].as_array().into_iter().flatten().filter_map(deezer_track) {
+            // Keep the first (best ranked) of each artist + title + length.
+            if !tracks.iter().any(|o| same_recording(o, &t)) {
+                tracks.push(t);
+            }
+        }
+        tracks.truncate(limit);
+        Ok(tracks)
     }
 
     /// Queue a track or a whole album for download as FLAC.
@@ -339,6 +348,10 @@ fn deezer_track(t: &Value) -> Option<DeezerTrack> {
         duration: t["duration"].as_f64().unwrap_or(0.0),
         cover: t["album"]["cover_small"].as_str().map(str::to_owned),
     })
+}
+
+fn same_recording(a: &DeezerTrack, b: &DeezerTrack) -> bool {
+    a.artist.to_lowercase() == b.artist.to_lowercase() && a.title.to_lowercase() == b.title.to_lowercase() && (a.duration - b.duration).abs() <= 2.0
 }
 
 /// Deezer ids come as numbers or strings depending on the endpoint.

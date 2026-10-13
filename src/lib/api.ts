@@ -157,6 +157,14 @@ export interface LibraryTrack {
   relPath: string;
   duration: number;
   summary: { integrated: number | null; dr: number | null; tilt: number | null; correlation: number | null } | null;
+  /** From the file's tags, when it has them. */
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  /** Absolute path of the album art thumbnail. */
+  cover: string | null;
+  /** Other files with the same audio, folded into this entry. */
+  copies: string[];
 }
 
 export interface LibraryMatch extends LibraryTrack {

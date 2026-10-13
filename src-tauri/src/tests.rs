@@ -545,3 +545,42 @@ fn eq_real_pair() {
         std::fs::write(out, serde_json::to_string(&r).unwrap()).unwrap();
     }
 }
+
+/// Index a real folder and print the best matches for its first track.
+/// Set `SONIC_LIBRARY_DIR` to a folder of audio files (a few albums is plenty).
+#[test]
+fn library_real_folder() {
+    use crate::library::Library;
+    let Some(root) = std::env::var_os("SONIC_LIBRARY_DIR") else { return };
+    let db = std::env::temp_dir().join(format!("sonic-library-test-{}.json", std::process::id()));
+    let lib = Library::new(PathBuf::from(&root), db.clone());
+    let t = std::time::Instant::now();
+    lib.index(&|_| {});
+    let status = lib.status();
+    println!("indexed {} ({} failed) in {:.1?}", status.indexed, status.failed, t.elapsed());
+    assert!(status.error.is_none(), "{:?}", status.error);
+    assert!(status.indexed > 0);
+
+    // A second run finds nothing new.
+    lib.index(&|_| {});
+    assert_eq!(lib.status().queued, 0);
+
+    // Reloading from disk keeps everything, and a track's best match is itself.
+    let lib = Library::new(PathBuf::from(&root), db.clone());
+    assert_eq!(lib.status().indexed, status.indexed);
+    let first = lib.similar(&crate::similarity::Features { tonal: vec![], dynamics: vec![], stereo: vec![] }, &[], [1.0; 3], 1);
+    assert!(first.is_empty(), "no shared values means no match");
+    let path = lib.paths().into_iter().min().unwrap();
+    let audio = decode_file(std::path::Path::new(&path)).unwrap();
+    let report = crate::analyze_range(&audio, 0, audio.frames(), false).unwrap();
+    let matches = lib.similar(&report.features, &[], [0.5, 0.3, 0.2], 5);
+    for m in &matches {
+        println!("{:5.1}  t{:5.1} d{:5.1} s{:5.1}  {}", m.score, m.tonal.unwrap_or(0.0), m.dynamics.unwrap_or(0.0), m.stereo.unwrap_or(0.0), m.track.rel_path);
+    }
+    assert_eq!(matches[0].track.path, path);
+    // Searching for the file name finds it.
+    let name = std::path::Path::new(&path).file_stem().unwrap().to_string_lossy().to_uppercase();
+    assert!(lib.search(&name, 50).iter().any(|t| t.path == path), "search {name}");
+    assert!(matches[0].score > 99.0);
+    let _ = std::fs::remove_file(db);
+}

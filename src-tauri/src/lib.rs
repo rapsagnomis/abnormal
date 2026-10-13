@@ -1,9 +1,11 @@
 mod decode;
 mod dynamics;
 mod eq;
+mod library;
 mod loudness;
 mod peaks;
 mod player;
+mod similarity;
 mod spectrum;
 mod stereo;
 #[cfg(test)]
@@ -13,15 +15,20 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 
 use decode::AudioData;
 use dynamics::DynamicsReport;
 use loudness::LoudnessReport;
 use spectrum::SpectrumReport;
 use stereo::StereoReport;
+use library::{Library, LibraryTrack, Match};
+use similarity::Features;
 use peaks::Peaks;
 use player::{PlaybackBuffer, SLOTS, Shared, Transport};
+
+/// Library folder, relative to the home directory.
+const LIBRARY_DIR: &str = "Music/albums";
 
 /// Overview waveform resolution sent with each track. Enough for a full-width display on a
 /// large screen; zoomed views request finer peaks per range via `range_peaks`.
@@ -132,6 +139,19 @@ struct AnalysisReport {
     dynamics: DynamicsReport,
     spectrum: SpectrumReport,
     stereo: StereoReport,
+    /// Fingerprint for matching against the library.
+    features: Features,
+}
+
+/// Full analysis of frames `start..end`; shared by the `analyze` command and library indexing.
+fn analyze_range(audio: &AudioData, start: usize, end: usize, curves: bool) -> Result<AnalysisReport, String> {
+    let loudness = loudness::analyze(audio, start, end, curves).map_err(|e| format!("{e:#}"))?;
+    let start_s = start as f64 / audio.sample_rate as f64;
+    let dynamics = dynamics::analyze(audio, start, end, &loudness.blocks, start_s, curves);
+    let spectrum = spectrum::analyze(audio, start, end, loudness.stats.integrated);
+    let stereo = stereo::analyze(audio, start, end, start_s, curves);
+    let features = Features::new(&loudness.stats, &dynamics.stats, &spectrum, &stereo.stats);
+    Ok(AnalysisReport { loudness, dynamics, spectrum, stereo, features })
 }
 
 /// Loudness, dynamics, tonal balance and stereo image of a whole track (`range = None`) or a time range in seconds.
@@ -144,12 +164,7 @@ async fn analyze(
 ) -> Result<AnalysisReport, String> {
     with_audio(&state, slot, move |audio| {
         let (start, end) = to_frame_range(audio, range);
-        let loudness = loudness::analyze(audio, start, end, curves).map_err(|e| format!("{e:#}"))?;
-        let start_s = start as f64 / audio.sample_rate as f64;
-        let dynamics = dynamics::analyze(audio, start, end, &loudness.blocks, start_s, curves);
-        let spectrum = spectrum::analyze(audio, start, end, loudness.stats.integrated);
-        let stereo = stereo::analyze(audio, start, end, start_s, curves);
-        Ok(AnalysisReport { loudness, dynamics, spectrum, stereo })
+        analyze_range(audio, start, end, curves)
     })
     .await
 }
@@ -180,6 +195,42 @@ fn suggest_eq(track: Vec<f32>, reference: Vec<f32>) -> eq::EqReport {
 #[tauri::command]
 async fn write_text_file(path: String, contents: String) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(|e| format!("could not write {path}: {e}"))
+}
+
+#[tauri::command]
+fn library_status(library: State<'_, Arc<Library>>) -> library::Status {
+    library.status()
+}
+
+/// Re-scan the library folder for new or changed files, in the background.
+#[tauri::command]
+fn rescan_library(app: tauri::AppHandle, library: State<'_, Arc<Library>>) {
+    let library = library.inner().clone();
+    std::thread::spawn(move || index_library(&library, &app));
+}
+
+fn index_library(library: &Library, app: &tauri::AppHandle) {
+    library.index(&|status| {
+        let _ = app.emit("library-status", status);
+    });
+}
+
+/// Library tracks that sound most like `features`; `weights` balance tonal, dynamics, stereo.
+#[tauri::command]
+fn similar_tracks(
+    features: Features,
+    exclude: Vec<String>,
+    weights: [f64; 3],
+    limit: usize,
+    library: State<'_, Arc<Library>>,
+) -> Vec<Match> {
+    library.similar(&features, &exclude, weights, limit)
+}
+
+/// Library tracks whose path contains every word of `query`.
+#[tauri::command]
+fn search_library(query: String, limit: usize, library: State<'_, Arc<Library>>) -> Vec<LibraryTrack> {
+    library.search(&query, limit)
 }
 
 #[tauri::command]
@@ -249,6 +300,16 @@ pub fn run() {
             audio_error,
             tracks: Arc::new(Mutex::new([None, None])),
         })
+        .setup(|app| {
+            let root = app.path().home_dir()?.join(LIBRARY_DIR);
+            let db_path = app.path().app_data_dir()?.join("library.json");
+            let library = Arc::new(Library::new(root, db_path));
+            app.manage(library.clone());
+            // Pick up tracks added since the last run.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || index_library(&library, &handle));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             audio_status,
             load_track,
@@ -263,6 +324,10 @@ pub fn run() {
             set_trims,
             suggest_eq,
             write_text_file,
+            library_status,
+            rescan_library,
+            similar_tracks,
+            search_library,
             transport,
         ])
         .run(tauri::generate_context!())

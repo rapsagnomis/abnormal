@@ -1,4 +1,4 @@
-import type { AnalysisReport, EqReport, Region } from "../lib/api";
+import type { AnalysisReport, EqReport, LibraryStatus, Region, Slot } from "../lib/api";
 import { describe, eqAsText, formatGain, formatHz, KIND_LABEL } from "../lib/eq";
 import { formatTime } from "../lib/format";
 import { fmt, SECTIONS, showValue } from "../lib/metrics";
@@ -6,6 +6,7 @@ import type { Section, Tab } from "../lib/metrics";
 import { FrequencyChart } from "./FrequencyChart";
 import { Goniometer } from "./Goniometer";
 import { HistogramChart } from "./HistogramChart";
+import { SimilarView } from "./SimilarView";
 
 export type Scope = "full" | "selection";
 export type { Tab };
@@ -16,6 +17,7 @@ const TABS: [Tab, string][] = [
   ["tonal", "Tonal"],
   ["stereo", "Stereo"],
   ["eq", "EQ match"],
+  ["similar", "Similar"],
 ];
 
 interface Props {
@@ -29,8 +31,13 @@ interface Props {
   /** Selected ranges per track, shown when measuring the selection. */
   regions: [Region | null, Region | null];
   eq: EqReport | null;
+  /** Paths of the loaded tracks. */
+  paths: [string | null, string | null];
+  library: LibraryStatus | null;
   onTab: (tab: Tab) => void;
   onScope: (scope: Scope) => void;
+  onLoad: (slot: Slot, path: string) => void;
+  onRescan: () => void;
 }
 
 
@@ -77,7 +84,13 @@ export function AnalysisPanel(p: Props) {
         </p>
       )}
 
-      {p.tab === "eq" ? <EqView eq={p.eq} freqs={freqs} hasBoth={!!(ra && rb)} /> : <MetricsTable sections={SECTIONS[p.tab]} {...p} />}
+      {p.tab === "eq" ? (
+        <EqView eq={p.eq} freqs={freqs} hasBoth={!!(ra && rb)} />
+      ) : p.tab === "similar" ? (
+        <SimilarView reports={p.reports} paths={p.paths} status={p.library} onLoad={p.onLoad} onRescan={p.onRescan} />
+      ) : (
+        <MetricsTable sections={SECTIONS[p.tab]} {...p} />
+      )}
 
       {p.tab === "dynamics" && (
         <>

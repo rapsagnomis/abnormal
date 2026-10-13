@@ -18,6 +18,9 @@ Built with [Tauri](https://tauri.app) — a Rust audio/analysis core and a React
 | Tonal | Loudness-normalised spectrum (1/6 oct), A − B difference, centroid, tilt, 7 band levels |
 | Stereo | Phase correlation, side/mid, L/R balance, width per band and per frequency, goniometers |
 | EQ match | Up to 6 bell/shelf moves for A to approach B, with the needed vs. suggested curve |
+| Similar | Songs from your library that sound most like A or B — overall, or on tonal balance, dynamics or stereo only. Search the library by artist, album or title. Load any match or result into A or B |
+
+**Library**: every mp3, flac and wav under `~/Music/albums` (all subfolders) is analysed in the background and kept in a database (`library.json` in the app data folder). At each start only new or changed files are analysed, and deleted ones are dropped; *Rescan* in the Similar tab does the same on demand. The first run over a large library takes a while — matches fill in as it goes.
 
 Curves can be overlaid on the waveforms: momentary or short-term loudness, PSR, or correlation (`C` cycles). **Export report** saves the comparison as Markdown or a JSON summary.
 
@@ -43,7 +46,8 @@ The suite checks the analysis against reference signals (EBU Tech 3341/3342 loud
 
 ```
 src-tauri/src/   decode, player (playback), peaks, loudness, dynamics,
-                 spectrum, stereo, eq, lib (Tauri commands)
+                 spectrum, stereo, eq, similarity (fingerprints), library (index),
+                 lib (Tauri commands)
 src/             App, components (lanes, waveform, panel, charts), lib (API, metrics, report)
 PLAN.md          design decisions and build phases
 ```

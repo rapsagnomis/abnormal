@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, AUDIO_EXTENSIONS, isAudioFile, SLOTS } from "./lib/api";
@@ -6,6 +7,7 @@ import type {
   AnalysisReport,
   AudioStatus,
   EqReport,
+  LibraryStatus,
   Region,
   Slot,
   TrackInfo,
@@ -61,6 +63,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("loudness");
   const [eq, setEq] = useState<EqReport | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [library, setLibrary] = useState<LibraryStatus | null>(null);
 
   // Latest state for event handlers registered once (keyboard, drag & drop).
   const latest = useRef({ tracks, regions, views, transport, linked });
@@ -70,6 +73,15 @@ export default function App() {
 
   useEffect(() => {
     api.audioStatus().then(setAudioStatus);
+  }, []);
+
+  // The library is indexed in the background from startup; follow its progress.
+  useEffect(() => {
+    const unlisten = listen<LibraryStatus>("library-status", (e) => setLibrary(e.payload));
+    api.libraryStatus().then(setLibrary);
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   // Poll the engine's playheads once per animation frame.
@@ -510,7 +522,11 @@ export default function App() {
           hasSelection={hasSelection}
           regions={regions}
           eq={eq}
+          paths={[tracks[0]?.path ?? null, tracks[1]?.path ?? null]}
+          library={library}
           onScope={setScope}
+          onLoad={loadFile}
+          onRescan={() => api.rescanLibrary()}
         />
       </div>
 

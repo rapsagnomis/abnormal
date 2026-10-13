@@ -124,12 +124,51 @@ export interface StereoReport {
   correlation: Curve | null;
 }
 
+/** Sonic fingerprint used to match tracks against the library; passed back as is. */
+export interface Features {
+  tonal: (number | null)[];
+  dynamics: (number | null)[];
+  stereo: (number | null)[];
+}
+
 export interface AnalysisReport {
   loudness: LoudnessReport;
   dynamics: DynamicsReport;
   spectrum: SpectrumReport;
   stereo: StereoReport;
+  features: Features;
 }
+
+export interface LibraryStatus {
+  root: string;
+  /** Tracks in the database with a fingerprint. */
+  indexed: number;
+  failed: number;
+  scanning: boolean;
+  /** Files to analyse in the current scan, and how many are done. */
+  queued: number;
+  done: number;
+  error: string | null;
+}
+
+export interface LibraryTrack {
+  path: string;
+  /** Path below the library folder. */
+  relPath: string;
+  duration: number;
+  summary: { integrated: number | null; dr: number | null; tilt: number | null; correlation: number | null } | null;
+}
+
+export interface LibraryMatch extends LibraryTrack {
+  /** Similarity 0–100, overall and per aspect. */
+  score: number;
+  tonal: number | null;
+  dynamics: number | null;
+  stereo: number | null;
+}
+
+/** Relative weight of tonal, dynamics and stereo distances. */
+export type MatchWeights = [number, number, number];
 
 export type FilterKind = "peak" | "lowShelf" | "highShelf";
 
@@ -179,4 +218,9 @@ export const api = {
   setTrims: (db: [number, number]) => invoke<void>("set_trims", { db }),
   suggestEq: (track: number[], reference: number[]) => invoke<EqReport>("suggest_eq", { track, reference }),
   writeTextFile: (path: string, contents: string) => invoke<void>("write_text_file", { path, contents }),
+  libraryStatus: () => invoke<LibraryStatus>("library_status"),
+  rescanLibrary: () => invoke<void>("rescan_library"),
+  similarTracks: (features: Features, exclude: string[], weights: MatchWeights, limit: number) =>
+    invoke<LibraryMatch[]>("similar_tracks", { features, exclude, weights, limit }),
+  searchLibrary: (query: string, limit: number) => invoke<LibraryTrack[]>("search_library", { query, limit }),
 };

@@ -328,6 +328,22 @@ button:focus-visible {
   width: 44px;
   font-size: 15px;
 }
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+}
+.volume input {
+  width: 90px;
+  accent-color: var(--text-dim);
+}
+.volume-value {
+  min-width: 52px;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
 
 .ab-switch {
   display: flex;

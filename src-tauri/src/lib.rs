@@ -489,6 +489,11 @@ fn set_trims(db: [f64; SLOTS], state: State<'_, AppState>) {
 }
 
 #[tauri::command]
+fn set_volume(gain: f64, state: State<'_, AppState>) {
+    state.player.set_volume(gain);
+}
+
+#[tauri::command]
 fn unload_track(slot: usize, state: State<'_, AppState>) -> Result<(), String> {
     check_slot(slot)?;
     state.player.set_track(slot, None);
@@ -573,6 +578,7 @@ pub fn run() {
             analyze,
             range_peaks,
             set_trims,
+            set_volume,
             set_eq,
             suggest_eq,
             spectrogram,

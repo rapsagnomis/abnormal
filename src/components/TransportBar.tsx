@@ -27,7 +27,13 @@ interface Props {
   /** There are suggested moves to audition. */
   eqAvailable: boolean;
   onToggleEq: () => void;
+  /** App-wide output volume, dB (`VOLUME_MIN_DB` = muted). */
+  volumeDb: number;
+  onVolume: (db: number) => void;
 }
+
+/** Bottom of the volume slider, which mutes. */
+export const VOLUME_MIN_DB = -40;
 
 const CURVES: [CurveMode, string, string][] = [
   ["off", "Off", "Hide curve"],
@@ -54,6 +60,23 @@ export function TransportBar(p: Props) {
         <button onClick={() => p.onSkip(5)} disabled={!any} title="Forward 5 s (→)">
           +5s
         </button>
+        <label className="volume" title="Output volume for both tracks (double-click for 0 dB)">
+          <span className="control-label">Vol</span>
+          <input
+            type="range"
+            min={VOLUME_MIN_DB}
+            max={0}
+            step={0.5}
+            value={p.volumeDb}
+            onChange={(e) => p.onVolume(Number(e.target.value))}
+            onDoubleClick={() => p.onVolume(0)}
+            // Give focus back so the arrow and space shortcuts keep working on the transport.
+            onPointerUp={(e) => e.currentTarget.blur()}
+          />
+          <span className="volume-value">
+            {p.volumeDb <= VOLUME_MIN_DB ? "Mute" : `${p.volumeDb < 0 ? "−" : ""}${Math.abs(p.volumeDb).toFixed(1)} dB`}
+          </span>
+        </label>
       </div>
 
       <div className="transport-group">

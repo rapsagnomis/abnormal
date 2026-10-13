@@ -110,6 +110,8 @@ pub struct Shared {
     loop_enabled: AtomicBool,
     /// Per-track gain trim (linear, stored as f32 bits), e.g. for loudness matching.
     trims: [AtomicU32; SLOTS],
+    /// App-wide output volume (linear, 0–1, stored as f32 bits), applied after the trims.
+    volume: AtomicU32,
     /// Written only by the audio callback.
     positions: [AtomicU64; SLOTS],
     /// Pending seek per slot (frame index, `NONE` if none); consumed by the callback.
@@ -140,6 +142,7 @@ impl Shared {
             active: AtomicUsize::new(0),
             loop_enabled: AtomicBool::new(false),
             trims: [const { AtomicU32::new(UNITY_BITS) }; SLOTS],
+            volume: AtomicU32::new(UNITY_BITS),
             positions: [const { AtomicU64::new(0) }; SLOTS],
             seek_requests: [const { AtomicU64::new(NONE) }; SLOTS],
             loop_start: [const { AtomicU64::new(NONE) }; SLOTS],
@@ -198,6 +201,12 @@ impl Shared {
         self.trims[slot].store(linear.to_bits(), Ordering::Relaxed);
     }
 
+    /// Output volume for everything, linear; clamped to 0–1 so it only ever attenuates.
+    pub fn set_volume(&self, gain: f64) {
+        let gain = if gain.is_finite() { gain.clamp(0.0, 1.0) } else { 1.0 };
+        self.volume.store((gain as f32).to_bits(), Ordering::Relaxed);
+    }
+
     /// Filters to audition on a track; `enabled = false` keeps them loaded but bypassed.
     pub fn set_eq(&self, slot: usize, filters: &[Filter], enabled: bool) {
         let rate = self.rate();
@@ -236,6 +245,8 @@ struct Mixer {
     gains: [f32; SLOTS],
     /// Smoothed per-track trims.
     trims: [f32; SLOTS],
+    /// Smoothed output volume.
+    volume: f32,
     eq: [EqSettings; SLOTS],
     eq_state: [EqState; SLOTS],
     eq_version: u64,
@@ -280,6 +291,7 @@ impl Mixer {
         let looping = shared.loop_enabled.load(Ordering::Relaxed);
         let trim_targets: [f32; SLOTS] =
             std::array::from_fn(|i| f32::from_bits(shared.trims[i].load(Ordering::Relaxed)));
+        let volume_target = f32::from_bits(shared.volume.load(Ordering::Relaxed));
         let loops: [(u64, u64); SLOTS] = std::array::from_fn(|i| {
             (shared.loop_start[i].load(Ordering::Relaxed), shared.loop_end[i].load(Ordering::Relaxed))
         });
@@ -291,6 +303,7 @@ impl Mixer {
         } else {
             for frame in out.chunks_mut(self.out_channels) {
                 self.master = approach(self.master, master_target, self.fade_step);
+                self.volume += (volume_target - self.volume) * TRIM_SMOOTHING * self.fade_step;
                 let (mut l, mut r) = (0.0f32, 0.0f32);
                 for i in 0..SLOTS {
                     let target = if i == active { 1.0 } else { 0.0 };
@@ -299,7 +312,7 @@ impl Mixer {
                     let Some(track) = &tracks[i] else { continue };
                     if pos[i] < track.frames {
                         let idx = pos[i] as usize * 2;
-                        let g = self.gains[i] * self.trims[i] * self.master;
+                        let g = self.gains[i] * self.trims[i] * self.volume * self.master;
                         let (mut sl, mut sr) = (track.samples[idx], track.samples[idx + 1]);
                         if self.eq[i].count > 0 {
                             let (wl, wr) = run_eq(&self.eq[i], &mut self.eq_state[i], sl, sr);
@@ -376,6 +389,7 @@ pub fn start() -> (Arc<Shared>, Result<u32>) {
                     master: 0.0,
                     gains: [1.0, 0.0],
                     trims: [1.0; SLOTS],
+                    volume: 1.0,
                     eq: [EqSettings::default(); SLOTS],
                     eq_state: [[[[0.0; 2]; 2]; MAX_EQ_STAGES]; SLOTS],
                     eq_version: 0,

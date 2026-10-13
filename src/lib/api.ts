@@ -328,6 +328,8 @@ export const api = {
   rangePeaks: (slot: Slot, start: number, end: number, buckets: number) =>
     invoke<Peaks>("range_peaks", { slot, start, end, buckets }),
   setTrims: (db: [number, number]) => invoke<void>("set_trims", { db }),
+  /** App-wide output volume, linear 0–1. */
+  setVolume: (gain: number) => invoke<void>("set_volume", { gain }),
   setEq: (slot: Slot, filters: EqFilter[], enabled: boolean) => invoke<void>("set_eq", { slot, filters, enabled }),
   /** `rows × columns` bytes, row 0 = highest frequency. */
   spectrogram: (slot: Slot, start: number, end: number, columns: number, rows: number) =>

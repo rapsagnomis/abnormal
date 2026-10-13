@@ -27,7 +27,7 @@ import { TrackLane } from "./components/TrackLane";
 import type { Display } from "./components/Waveform";
 import { loudnessChange } from "./lib/eq";
 import { passageFor } from "./lib/passages";
-import { TransportBar } from "./components/TransportBar";
+import { TransportBar, VOLUME_MIN_DB } from "./components/TransportBar";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import type { Scope, Tab } from "./components/AnalysisPanel";
 import { overlayFor } from "./lib/overlay";
@@ -52,6 +52,16 @@ const INITIAL_TRANSPORT: Transport = {
 /** Wait this long after a selection changes before measuring it. */
 const SELECTION_DEBOUNCE_MS = 150;
 const ZOOM_STEP = 2;
+/** Output volume, dB; the bottom of the slider mutes. Remembered across launches. */
+const VOLUME_KEY = "volumeDb";
+const loadVolume = () => {
+  try {
+    const v = Number(localStorage.getItem(VOLUME_KEY));
+    return Number.isFinite(v) && v <= 0 && v >= VOLUME_MIN_DB ? v : 0;
+  } catch {
+    return 0;
+  }
+};
 const CURVE_CYCLE: CurveMode[] = ["off", "momentary", "shortTerm", "psr", "correlation"];
 
 export default function App() {
@@ -80,6 +90,7 @@ export default function App() {
   const [sections, setSections] = useState<Pair<Section[] | null>>(pair(null));
   /** Audition the suggested EQ on A's playback. */
   const [eqAudition, setEqAudition] = useState(false);
+  const [volumeDb, setVolumeDb] = useState(loadVolume);
   const [eqActive, setEqActive] = useState<boolean[]>([]);
   const [activity, setActivity] = useState<Pair<BandActivity | null>>(pair(null));
   /** Song parts, tempo and bars from the structure model (null until analysed). */
@@ -400,6 +411,15 @@ export default function App() {
   useEffect(() => {
     api.setTrims(trims);
   }, [trims[0], trims[1]]);
+
+  useEffect(() => {
+    api.setVolume(volumeDb <= VOLUME_MIN_DB ? 0 : 10 ** (volumeDb / 20));
+    try {
+      localStorage.setItem(VOLUME_KEY, String(volumeDb));
+    } catch {
+      // Not remembered; playback is unaffected.
+    }
+  }, [volumeDb]);
 
   const openDialog = async (slot: Slot) => {
     const path = await open({
@@ -755,6 +775,8 @@ export default function App() {
         eqOn={eqOn}
         eqAvailable={chosenEq.length > 0 && !!tracks[0]}
         onToggleEq={() => setEqAudition((v) => !v)}
+        volumeDb={volumeDb}
+        onVolume={setVolumeDb}
       />
 
       <p className="hints">

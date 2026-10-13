@@ -127,7 +127,11 @@ impl Deemix {
         let server = self.running(&mut guard)?;
         if !server.status.logged_in {
             let connect = get(server, "connect", &[])?;
-            if let Some(arl) = connect["singleUser"]["arl"].as_str().filter(|a| !a.is_empty()) {
+            let saved = connect["singleUser"]["arl"].as_str().filter(|a| !a.is_empty());
+            // Deemix forgets the saved ARL after any failed login, including when Deezer is
+            // unreachable, so only try it when Deezer is up.
+            let reachable = connect["deezerAvailable"].as_bool().unwrap_or(true);
+            if let Some(arl) = saved.filter(|_| reachable) {
                 // A rejected saved ARL just leaves us logged out; the user can paste a new one.
                 let _ = login(server, arl);
             } else if !connect["autologin"].as_bool().unwrap_or(true) {
@@ -258,6 +262,9 @@ impl Deemix {
             .arg(self.app.join(SERVER_JS))
             .args(["--host", "127.0.0.1", "--port", &port.to_string(), "--singleuser"])
             .env("ELECTRON_RUN_AS_NODE", "1")
+            // Deemix ignores `--singleuser` (it reads `!!env ?? flag`, which never falls through),
+            // so single-user mode, and with it the saved ARL, is switched on by this variable.
+            .env("DEEMIX_SINGLE_USER", "1")
             .env("DEEMIX_DATA_DIR", dir_arg(&self.data_dir))
             .env("DEEMIX_MUSIC_DIR", dir_arg(&self.music_dir))
             .stdin(Stdio::null())

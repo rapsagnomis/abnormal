@@ -339,7 +339,11 @@ button:focus-visible {
   accent-color: var(--text-dim);
 }
 .volume-value {
-  min-width: 52px;
+  /* Fixed width so the readout ("Mute" … "−39.5 dB") never shifts the rest of the bar. */
+  flex: none;
+  width: 64px;
+  white-space: nowrap;
+  text-align: right;
   color: var(--text-dim);
   font-size: 13px;
   font-variant-numeric: tabular-nums;

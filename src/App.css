@@ -15,6 +15,17 @@
   --series-b: #cc7d26;
   /* Single-series difference curves: neutral, so it never reads as A or B. */
   --series-diff: #b9c0cc;
+  /* Section labels: categorical slots in fixed order (dark-mode steps); a letter on each
+     block carries identity too. Labels past the eighth fold into a neutral grey. */
+  --section-0: #3987e5;
+  --section-1: #d95926;
+  --section-2: #199e70;
+  --section-3: #c98500;
+  --section-4: #d55181;
+  --section-5: #008300;
+  --section-6: #9085e9;
+  --section-7: #e66767;
+  --section-other: #5b616b;
 
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
   font-size: 13px;
@@ -205,7 +216,7 @@ button:focus-visible {
 
 .waveform {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 18px auto;
+  grid-template-rows: minmax(0, 1fr) auto 18px auto;
   height: 100%;
 }
 
@@ -817,4 +828,76 @@ kbd {
 .library-search:focus {
   outline: none;
   border-color: #3d4450;
+}
+
+/* ── Sections strip ────────────────────────────────── */
+
+.section-strip {
+  position: relative;
+  height: 16px;
+  margin-top: 3px;
+}
+.section-block {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding: 0 4px;
+  border: none;
+  border-radius: 3px;
+  /* 2px surface gap between neighbouring blocks. */
+  box-shadow: inset -2px 0 0 var(--panel);
+  background: color-mix(in srgb, var(--section-color) 55%, var(--panel));
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.section-block:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--section-color) 80%, var(--panel));
+  border: none;
+}
+.section-block.on {
+  background: var(--section-color);
+  color: #10161a;
+}
+.section-block.label-0 { --section-color: var(--section-0); }
+.section-block.label-1 { --section-color: var(--section-1); }
+.section-block.label-2 { --section-color: var(--section-2); }
+.section-block.label-3 { --section-color: var(--section-3); }
+.section-block.label-4 { --section-color: var(--section-4); }
+.section-block.label-5 { --section-color: var(--section-5); }
+.section-block.label-6 { --section-color: var(--section-6); }
+.section-block.label-7 { --section-color: var(--section-7); }
+.section-block.label-other { --section-color: var(--section-other); }
+.section-strip.pending {
+  background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0 6px, transparent 6px 12px);
+  border-radius: 3px;
+}
+
+/* ── EQ audition ───────────────────────────────────── */
+
+.eq-table tr.off td,
+.eq-table tr.off th {
+  opacity: 0.4;
+}
+.eq-table input[type="checkbox"] {
+  margin: 0;
+  accent-color: #5b8def;
+}
+.eq-audition {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.eq-audition .chart-note {
+  margin: 0;
+}
+
+.eq-table button.listen {
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 18px;
 }

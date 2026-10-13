@@ -5,7 +5,7 @@
 //! Filters are then fitted greedily: each step tries peaking filters at the residual's extrema
 //! and low/high shelves, and keeps whichever removes the most perceptually weighted error.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Points per octave of the spectrum grid (see `spectrum::grid`).
 const POINTS_PER_OCTAVE: f64 = 24.0;
@@ -33,7 +33,7 @@ const SHELF_Q: f64 = std::f64::consts::FRAC_1_SQRT_2;
 const LOW_SHELF_RANGE_HZ: (f64, f64) = (40.0, 400.0);
 const HIGH_SHELF_RANGE_HZ: (f64, f64) = (2000.0, 12000.0);
 
-#[derive(Serialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum FilterKind {
     Peak,
@@ -41,7 +41,7 @@ pub enum FilterKind {
     HighShelf,
 }
 
-#[derive(Serialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub struct Filter {
     pub kind: FilterKind,
@@ -66,6 +66,28 @@ pub struct EqReport {
     pub error_after: f64,
 }
 
+/// Biquad coefficients normalised so a0 = 1.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Biquad {
+    pub b0: f64,
+    pub b1: f64,
+    pub b2: f64,
+    pub a1: f64,
+    pub a2: f64,
+}
+
+impl Biquad {
+    /// Magnitude response at `f` Hz, dB.
+    #[cfg(test)]
+    pub fn response_db(&self, f: f64, sample_rate: f64) -> f64 {
+        use realfft::num_complex::Complex;
+        let z = Complex::from_polar(1.0, -2.0 * std::f64::consts::PI * f / sample_rate);
+        let num = self.b0 + self.b1 * z + self.b2 * z * z;
+        let den = 1.0 + self.a1 * z + self.a2 * z * z;
+        20.0 * (num / den).norm().log10()
+    }
+}
+
 impl Filter {
     /// Magnitude response in dB at `f`, using the analog prototypes of the RBJ cookbook filters
     /// (independent of sample rate, accurate well below Nyquist).
@@ -88,6 +110,36 @@ impl Filter {
             }
         };
         10.0 * mag2.log10()
+    }
+
+    /// Digital RBJ cookbook coefficients at `sample_rate`, for playing the move back. The corner
+    /// is kept below Nyquist, where the bilinear transform would otherwise fold it.
+    pub fn biquad(&self, sample_rate: f64) -> Biquad {
+        let f = self.freq.min(sample_rate * 0.45);
+        let a = 10f64.powf(self.gain / 40.0);
+        let (sin, cos) = (2.0 * std::f64::consts::PI * f / sample_rate).sin_cos();
+        let alpha = sin / (2.0 * self.q);
+        let sa = 2.0 * a.sqrt() * alpha;
+        let (b0, b1, b2, a0, a1, a2) = match self.kind {
+            FilterKind::Peak => (1.0 + alpha * a, -2.0 * cos, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * cos, 1.0 - alpha / a),
+            FilterKind::LowShelf => (
+                a * ((a + 1.0) - (a - 1.0) * cos + sa),
+                2.0 * a * ((a - 1.0) - (a + 1.0) * cos),
+                a * ((a + 1.0) - (a - 1.0) * cos - sa),
+                (a + 1.0) + (a - 1.0) * cos + sa,
+                -2.0 * ((a - 1.0) + (a + 1.0) * cos),
+                (a + 1.0) + (a - 1.0) * cos - sa,
+            ),
+            FilterKind::HighShelf => (
+                a * ((a + 1.0) + (a - 1.0) * cos + sa),
+                -2.0 * a * ((a - 1.0) + (a + 1.0) * cos),
+                a * ((a + 1.0) + (a - 1.0) * cos - sa),
+                (a + 1.0) - (a - 1.0) * cos + sa,
+                2.0 * ((a - 1.0) - (a + 1.0) * cos),
+                (a + 1.0) - (a - 1.0) * cos - sa,
+            ),
+        };
+        Biquad { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 }
     }
 
     /// Round to values you would actually dial in.

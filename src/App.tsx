@@ -6,9 +6,12 @@ import { api, AUDIO_EXTENSIONS, isAudioFile, SLOTS } from "./lib/api";
 import type {
   AnalysisReport,
   AudioStatus,
+  BandActivity,
+  EqFilter,
   EqReport,
   LibraryStatus,
   Region,
+  Section,
   Slot,
   TrackInfo,
   Transport,
@@ -17,6 +20,9 @@ import { formatRate } from "./lib/format";
 import type { View } from "./lib/view";
 import { clampView, fullView, isFull, zoomView } from "./lib/view";
 import { TrackLane } from "./components/TrackLane";
+import type { Display } from "./components/Waveform";
+import { loudnessChange } from "./lib/eq";
+import { passageFor } from "./lib/passages";
 import { TransportBar } from "./components/TransportBar";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import type { Scope, Tab } from "./components/AnalysisPanel";
@@ -64,6 +70,12 @@ export default function App() {
   const [eq, setEq] = useState<EqReport | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [library, setLibrary] = useState<LibraryStatus | null>(null);
+  const [display, setDisplay] = useState<Display>("wave");
+  const [sections, setSections] = useState<Pair<Section[] | null>>(pair(null));
+  /** Audition the suggested EQ on A's playback. */
+  const [eqAudition, setEqAudition] = useState(false);
+  const [eqActive, setEqActive] = useState<boolean[]>([]);
+  const [activity, setActivity] = useState<Pair<BandActivity | null>>(pair(null));
 
   // Latest state for event handlers registered once (keyboard, drag & drop).
   const latest = useRef({ tracks, regions, views, transport, linked });
@@ -108,6 +120,7 @@ export default function App() {
     setViews((v) => setAt(v, slot, null));
     setReports((r) => setAt(r, slot, null));
     setSelectionReports((s) => setAt(s, slot, null));
+    setSections((s) => setAt(s, slot, null));
   };
 
   const loadFile = useCallback(async (slot: Slot, path: string) => {
@@ -141,6 +154,14 @@ export default function App() {
       if (seq === loadSeq.current[slot]) setErrors((e) => setAt(e, slot, `Analysis: ${err}`));
     } finally {
       if (seq === loadSeq.current[slot]) setMeasuringFull((m) => setAt(m, slot, false));
+    }
+
+    try {
+      const found = await api.sections(slot);
+      if (seq === loadSeq.current[slot]) setSections((s) => setAt(s, slot, found));
+    } catch {
+      // Sections are optional: the strip just stays empty.
+      if (seq === loadSeq.current[slot]) setSections((s) => setAt(s, slot, []));
     }
   }, []);
 
@@ -223,14 +244,66 @@ export default function App() {
     [effectiveScope, regions, selectionReports, reports],
   );
 
-  // Loudness matching: turn the louder track down to the quieter one. Never boost, so matching
-  // can't push a track into clipping.
+  // A fresh set of suggestions starts with every move switched on.
+  useEffect(() => {
+    setEqActive(eq ? eq.suggestions.map(() => true) : []);
+  }, [eq]);
+
+  const chosenEq = useMemo<EqFilter[]>(
+    () => (eq ? eq.suggestions.filter((_, i) => eqActive[i] ?? true) : []),
+    [eq, eqActive],
+  );
+  const eqOn = eqAudition && chosenEq.length > 0 && !!tracks[0];
+
+  // Compensate the EQ's loudness change, so switching it on doesn't just sound louder.
+  const eqCompensation = useMemo(() => {
+    const a = shown[0];
+    return eqOn && a ? -loudnessChange(a.spectrum.freqs, a.spectrum.level, chosenEq) : 0;
+  }, [eqOn, shown[0], chosenEq]);
+
+  useEffect(() => {
+    if (tracks[0]) api.setEq(0, chosenEq, eqOn);
+  }, [chosenEq, eqOn, tracks[0]]);
+
+  // Loudness matching turns the louder track down to the quieter one; EQ compensation is added on
+  // top. Never boost (if a trim would be positive, both come down instead), so playback can't
+  // be pushed into clipping.
   const trims = useMemo<Pair<number>>(() => {
     const [a, b] = shown.map((r) => r?.loudness.stats.integrated ?? null);
-    if (!matchEnabled || a === null || b === null) return [0, 0];
-    const target = Math.min(a, b);
-    return [target - a, target - b];
-  }, [matchEnabled, shown[0]?.loudness.stats.integrated, shown[1]?.loudness.stats.integrated]);
+    const raw: Pair<number> = [eqCompensation, 0];
+    if (matchEnabled && a !== null && b !== null) {
+      const target = Math.min(a, b);
+      raw[0] += target - a;
+      raw[1] += target - b;
+    }
+    const lift = Math.max(0, raw[0], raw[1]);
+    return [raw[0] - lift, raw[1] - lift];
+  }, [matchEnabled, shown[0]?.loudness.stats.integrated, shown[1]?.loudness.stats.integrated, eqCompensation]);
+
+  // Band levels over time, for whatever is being measured: used to find where each EQ move matters.
+  const activityKey = SLOTS.map((s) => `${tracks[s]?.path ?? ""}@${useSelection(s) ? `${regions[s]!.start}-${regions[s]!.end}` : "full"}`).join("|");
+  useEffect(() => {
+    if (tab !== "eq") return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      Promise.all(
+        SLOTS.map((s) => (tracks[s] ? api.bandActivity(s, useSelection(s) ? regions[s] : null).catch(() => null) : null)),
+      ).then(([a, b]) => {
+        if (cancelled) return;
+        setActivity([a, b]);
+      });
+    }, SELECTION_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, activityKey]);
+
+  const eqPassages = useMemo(() => {
+    const [a, b] = activity;
+    return eq?.suggestions.map((f) => (a && b ? passageFor(f, a, b) : null)) ?? [];
+  }, [eq, activity]);
 
   // EQ match: moves on A towards B, for whatever is being measured (full tracks or selections).
   useEffect(() => {
@@ -402,6 +475,17 @@ export default function App() {
     api.setLoopEnabled(!latest.current.transport.loopEnabled);
   }, []);
 
+  /** Select and loop a passage of A, listening to A. */
+  const listenTo = useCallback(
+    (region: Region) => {
+      if (!latest.current.tracks[0]) return;
+      setRegion(0, region);
+      api.setLoopEnabled(true);
+      selectSlot(0);
+    },
+    [setRegion, selectSlot],
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -454,6 +538,14 @@ export default function App() {
         case "M":
           setMatchEnabled((v) => !v);
           break;
+        case "e":
+        case "E":
+          setEqAudition((v) => !v);
+          break;
+        case "s":
+        case "S":
+          setDisplay((d) => (d === "wave" ? "spectrogram" : "wave"));
+          break;
         case "c":
         case "C":
           setCurveMode((m) => CURVE_CYCLE[(CURVE_CYCLE.indexOf(m) + 1) % CURVE_CYCLE.length]);
@@ -499,6 +591,9 @@ export default function App() {
               region={regions[slot]}
               view={views[slot]}
               overlay={overlays[slot]}
+              display={display}
+              sections={tracks[slot] ? sections[slot] : null}
+              eqOn={slot === 0 && eqOn}
               trimDb={trims[slot]}
               active={transport.active === slot && !!tracks[slot]}
               dropTarget={dropSlot === slot}
@@ -524,6 +619,13 @@ export default function App() {
           eq={eq}
           paths={[tracks[0]?.path ?? null, tracks[1]?.path ?? null]}
           library={library}
+          eqActive={eqActive}
+          eqAudition={eqOn}
+          eqCompensation={eqCompensation}
+          eqPassages={eqPassages}
+          onEqActive={(i, on) => setEqActive((v) => v.map((x, k) => (k === i ? on : x)))}
+          onEqAudition={setEqAudition}
+          onListen={listenTo}
           onScope={setScope}
           onLoad={loadFile}
           onRescan={() => api.rescanLibrary()}
@@ -547,11 +649,17 @@ export default function App() {
         matchEnabled={matchEnabled}
         matchBasis={effectiveScope === "selection" ? "the selections" : "the full tracks"}
         onToggleMatch={() => setMatchEnabled((v) => !v)}
+        display={display}
+        onDisplay={setDisplay}
+        eqOn={eqOn}
+        eqAvailable={chosenEq.length > 0 && !!tracks[0]}
+        onToggleEq={() => setEqAudition((v) => !v)}
       />
 
       <p className="hints">
         Space play · Tab or 1/2 A/B · ←/→ ±5 s · drag to select, double-click/Esc clears · wheel or
-        pinch to zoom, Shift+wheel to pan · +/− zoom · 0 fit · L loop · K link · M match · C curve
+        pinch to zoom, Shift+wheel to pan · +/− zoom · 0 fit · L loop · K link · M match · E EQ · C curve · S
+        spectrogram · click a section to select it, Shift+click to extend
       </p>
     </div>
   );

@@ -37,3 +37,50 @@ export function eqAsText(filters: EqFilter[]): string {
     .map((f, i) => `${i + 1}. ${KIND_LABEL[f.kind]} ${formatHz(f.freq)} ${formatGain(f.gain)} Q ${f.q.toFixed(1)} (${describe(f)})`)
     .join("\n");
 }
+
+/** Magnitude response in dB at `f` (analog RBJ prototypes; mirrors `Filter::response_db` in eq.rs). */
+export function responseDb(filter: EqFilter, f: number): number {
+  const a = Math.pow(10, filter.gain / 40);
+  const w = f / filter.freq;
+  const w2 = w * w;
+  const q = filter.q;
+  let mag2: number;
+  if (filter.kind === "peak") {
+    mag2 = ((1 - w2) ** 2 + ((w * a) / q) ** 2) / ((1 - w2) ** 2 + (w / (a * q)) ** 2);
+  } else {
+    const k = (w2 * a) / (q * q);
+    mag2 =
+      filter.kind === "lowShelf"
+        ? (a * a * ((a - w2) ** 2 + k)) / ((1 - a * w2) ** 2 + k)
+        : (a * a * ((1 - a * w2) ** 2 + k)) / ((a - w2) ** 2 + k);
+  }
+  return 10 * Math.log10(mag2);
+}
+
+/** Combined response of `filters` at each frequency, dB. */
+export const curveOf = (filters: EqFilter[], freqs: number[]) =>
+  freqs.map((f) => filters.reduce((sum, x) => sum + responseDb(x, f), 0));
+
+/** Approximate BS.1770 K-weighting: +4 dB high shelf around 1.7 kHz and a 38 Hz high-pass. */
+function kWeightDb(f: number): number {
+  const shelf = responseDb({ kind: "highShelf", freq: 1681, gain: 4, q: Math.SQRT1_2 }, f);
+  const w = f / 38;
+  const hp = (w ** 4) / ((1 - w * w) ** 2 + (w / 0.5) ** 2);
+  return shelf + 10 * Math.log10(hp);
+}
+
+/**
+ * How much louder `filters` make a track with spectrum `level` (dB per grid point), in LU.
+ * Used to level-compensate EQ playback so switching it on doesn't just sound louder.
+ */
+export function loudnessChange(freqs: number[], level: number[], filters: EqFilter[]): number {
+  if (filters.length === 0) return 0;
+  let before = 0;
+  let after = 0;
+  freqs.forEach((f, i) => {
+    const p = Math.pow(10, (level[i] + kWeightDb(f)) / 10);
+    before += p;
+    after += p * Math.pow(10, filters.reduce((s, x) => s + responseDb(x, f), 0) / 10);
+  });
+  return before > 0 ? 10 * Math.log10(after / before) : 0;
+}

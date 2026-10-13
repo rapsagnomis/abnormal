@@ -1,3 +1,4 @@
+mod activity;
 mod decode;
 mod dynamics;
 mod eq;
@@ -5,9 +6,12 @@ mod library;
 mod loudness;
 mod peaks;
 mod player;
+mod sections;
 mod similarity;
+mod spectrogram;
 mod spectrum;
 mod stereo;
+mod stft;
 #[cfg(test)]
 mod tests;
 
@@ -191,6 +195,53 @@ fn suggest_eq(track: Vec<f32>, reference: Vec<f32>) -> eq::EqReport {
     eq::suggest(&spectrum::grid(), &track, &reference)
 }
 
+/// Spectrogram of a time range as `rows × columns` bytes (row 0 = highest frequency), sent as a
+/// raw buffer rather than JSON.
+#[tauri::command]
+async fn spectrogram(
+    slot: usize,
+    start: f64,
+    end: f64,
+    columns: usize,
+    rows: usize,
+    state: State<'_, AppState>,
+) -> Result<tauri::ipc::Response, String> {
+    let (columns, rows) = (columns.clamp(1, 4096), rows.clamp(1, 512));
+    with_audio(&state, slot, move |audio| {
+        let (s, e) = to_frame_range(audio, Some((start, end)));
+        Ok(tauri::ipc::Response::new(spectrogram::compute(audio, s, e, columns, rows)))
+    })
+    .await
+}
+
+/// Song sections of a whole track, labelled so that sections that sound alike share a label.
+#[tauri::command]
+async fn sections(slot: usize, state: State<'_, AppState>) -> Result<Vec<sections::Section>, String> {
+    with_audio(&state, slot, |audio| Ok(sections::analyze(audio, 0, audio.frames()))).await
+}
+
+/// Per-band share of the moment's energy over time, used to find where each EQ move matters.
+#[tauri::command]
+async fn band_activity(
+    slot: usize,
+    range: Option<(f64, f64)>,
+    state: State<'_, AppState>,
+) -> Result<activity::BandActivity, String> {
+    with_audio(&state, slot, move |audio| {
+        let (start, end) = to_frame_range(audio, range);
+        Ok(activity::analyze(audio, start, end))
+    })
+    .await
+}
+
+/// Audition EQ moves on a track's playback (`enabled = false` bypasses them).
+#[tauri::command]
+fn set_eq(slot: usize, filters: Vec<eq::Filter>, enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    check_slot(slot)?;
+    state.player.set_eq(slot, &filters, enabled);
+    Ok(())
+}
+
 /// Write a report to a path the user picked in the save dialog.
 #[tauri::command]
 async fn write_text_file(path: String, contents: String) -> Result<(), String> {
@@ -322,7 +373,11 @@ pub fn run() {
             analyze,
             range_peaks,
             set_trims,
+            set_eq,
             suggest_eq,
+            spectrogram,
+            sections,
+            band_activity,
             write_text_file,
             library_status,
             rescan_library,

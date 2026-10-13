@@ -191,6 +191,32 @@ export interface EqReport {
   errorAfter: number;
 }
 
+/** A detected song section; sections with the same label sound alike. */
+export interface Section {
+  start: number;
+  end: number;
+  /** 0 = first kind of section heard, 1 = the next new one, … */
+  label: number;
+  /** Mean power relative to the whole track, dB. */
+  level: number;
+}
+
+/** Per-band share of the moment's energy over time (masking view). */
+export interface BandActivity {
+  /** Band edges, Hz. */
+  bands: [number, number][];
+  /** Cell `i` is centred at `t0 + i * hop` seconds. */
+  t0: number;
+  hop: number;
+  /** `levels[band][cell]`: dB relative to the surrounding 3 s; null = silence. */
+  levels: (number | null)[][];
+}
+
+/** Spectrogram rows are log-spaced over this range (see `spectrogram.rs`). */
+export const SPECTROGRAM_HZ = [30, 20000] as const;
+/** Spectrogram bytes map linearly from this level (0) to 0 dB (255). */
+export const SPECTROGRAM_FLOOR_DB = -120;
+
 export const AUDIO_EXTENSIONS = ["mp3", "flac", "wav"];
 
 export const isAudioFile = (path: string) =>
@@ -216,6 +242,13 @@ export const api = {
   rangePeaks: (slot: Slot, start: number, end: number, buckets: number) =>
     invoke<Peaks>("range_peaks", { slot, start, end, buckets }),
   setTrims: (db: [number, number]) => invoke<void>("set_trims", { db }),
+  setEq: (slot: Slot, filters: EqFilter[], enabled: boolean) => invoke<void>("set_eq", { slot, filters, enabled }),
+  /** `rows × columns` bytes, row 0 = highest frequency. */
+  spectrogram: (slot: Slot, start: number, end: number, columns: number, rows: number) =>
+    invoke<ArrayBuffer>("spectrogram", { slot, start, end, columns, rows }).then((b) => new Uint8Array(b)),
+  sections: (slot: Slot) => invoke<Section[]>("sections", { slot }),
+  bandActivity: (slot: Slot, region: Region | null) =>
+    invoke<BandActivity>("band_activity", { slot, range: region ? [region.start, region.end] : null }),
   suggestEq: (track: number[], reference: number[]) => invoke<EqReport>("suggest_eq", { track, reference }),
   writeTextFile: (path: string, contents: string) => invoke<void>("write_text_file", { path, contents }),
   libraryStatus: () => invoke<LibraryStatus>("library_status"),

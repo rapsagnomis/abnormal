@@ -14,6 +14,7 @@ use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Resampler};
 
 use crate::decode::AudioData;
+use crate::eq::{Biquad, Filter};
 
 pub const SLOTS: usize = 2;
 const NONE: u64 = u64::MAX;
@@ -22,6 +23,33 @@ const FADE_SECONDS: f32 = 0.015;
 /// Trim changes glide with a one-pole filter; this scales its coefficient relative to the fade step.
 const TRIM_SMOOTHING: f32 = 0.5;
 const UNITY_BITS: u32 = 0x3f80_0000; // 1.0f32
+/// Most EQ moves a track can be auditioned with (suggestions are capped at 6).
+pub const MAX_EQ_STAGES: usize = 8;
+
+/// Playback EQ for one track. Filters run even while disabled so switching it on is a crossfade
+/// between warm signals, not a transient.
+#[derive(Clone, Copy, Default)]
+struct EqSettings {
+    stages: [Biquad; MAX_EQ_STAGES],
+    count: usize,
+    enabled: bool,
+}
+
+/// Transposed direct form II state, per stage and channel.
+type EqState = [[[f64; 2]; 2]; MAX_EQ_STAGES];
+
+fn run_eq(settings: &EqSettings, state: &mut EqState, l: f32, r: f32) -> (f32, f32) {
+    let mut x = [l as f64, r as f64];
+    for (q, st) in settings.stages[..settings.count].iter().zip(state.iter_mut()) {
+        for (v, z) in x.iter_mut().zip(st.iter_mut()) {
+            let y = q.b0 * *v + z[0];
+            z[0] = q.b1 * *v - q.a1 * y + z[1];
+            z[1] = q.b2 * *v - q.a2 * y;
+            *v = y;
+        }
+    }
+    (x[0] as f32, x[1] as f32)
+}
 
 /// Interleaved stereo at the output device's sample rate.
 pub struct PlaybackBuffer {
@@ -89,6 +117,9 @@ pub struct Shared {
     loop_start: [AtomicU64; SLOTS],
     loop_end: [AtomicU64; SLOTS],
     tracks: Mutex<[Option<Arc<PlaybackBuffer>>; SLOTS]>,
+    /// Playback EQ per slot; the callback copies it when `eq_version` changes.
+    eq: Mutex<[EqSettings; SLOTS]>,
+    eq_version: AtomicU64,
 }
 
 #[derive(serde::Serialize)]
@@ -114,6 +145,8 @@ impl Shared {
             loop_start: [const { AtomicU64::new(NONE) }; SLOTS],
             loop_end: [const { AtomicU64::new(NONE) }; SLOTS],
             tracks: Mutex::new([None, None]),
+            eq: Mutex::new([EqSettings::default(); SLOTS]),
+            eq_version: AtomicU64::new(0),
         }
     }
 
@@ -165,6 +198,18 @@ impl Shared {
         self.trims[slot].store(linear.to_bits(), Ordering::Relaxed);
     }
 
+    /// Filters to audition on a track; `enabled = false` keeps them loaded but bypassed.
+    pub fn set_eq(&self, slot: usize, filters: &[Filter], enabled: bool) {
+        let rate = self.rate();
+        let mut settings = EqSettings { enabled, ..Default::default() };
+        for (stage, f) in settings.stages.iter_mut().zip(filters) {
+            *stage = f.biquad(rate);
+            settings.count += 1;
+        }
+        self.eq.lock().unwrap()[slot] = settings;
+        self.eq_version.fetch_add(1, Ordering::Release);
+    }
+
     pub fn set_loop_enabled(&self, enabled: bool) {
         self.loop_enabled.store(enabled, Ordering::Relaxed);
     }
@@ -191,6 +236,11 @@ struct Mixer {
     gains: [f32; SLOTS],
     /// Smoothed per-track trims.
     trims: [f32; SLOTS],
+    eq: [EqSettings; SLOTS],
+    eq_state: [EqState; SLOTS],
+    eq_version: u64,
+    /// Smoothed wet share of the EQ per track, 0–1.
+    eq_mix: [f32; SLOTS],
 }
 
 impl Mixer {
@@ -201,6 +251,23 @@ impl Mixer {
             out.fill(0.0);
             return;
         };
+
+        let version = shared.eq_version.load(Ordering::Acquire);
+        if version != self.eq_version {
+            if let Ok(eq) = shared.eq.try_lock() {
+                for i in 0..SLOTS {
+                    // Stages that were removed start from silence if they come back.
+                    for st in &mut self.eq_state[i][eq[i].count..] {
+                        *st = [[0.0; 2]; 2];
+                    }
+                    if eq[i].count == 0 {
+                        self.eq_mix[i] = 0.0;
+                    }
+                }
+                self.eq = *eq;
+                self.eq_version = version;
+            }
+        }
 
         let mut pos: [u64; SLOTS] = std::array::from_fn(|i| {
             match shared.seek_requests[i].swap(NONE, Ordering::Relaxed) {
@@ -233,8 +300,17 @@ impl Mixer {
                     if pos[i] < track.frames {
                         let idx = pos[i] as usize * 2;
                         let g = self.gains[i] * self.trims[i] * self.master;
-                        l += track.samples[idx] * g;
-                        r += track.samples[idx + 1] * g;
+                        let (mut sl, mut sr) = (track.samples[idx], track.samples[idx + 1]);
+                        if self.eq[i].count > 0 {
+                            let (wl, wr) = run_eq(&self.eq[i], &mut self.eq_state[i], sl, sr);
+                            let target = if self.eq[i].enabled { 1.0 } else { 0.0 };
+                            let m = approach(self.eq_mix[i], target, self.fade_step);
+                            self.eq_mix[i] = m;
+                            sl += (wl - sl) * m;
+                            sr += (wr - sr) * m;
+                        }
+                        l += sl * g;
+                        r += sr * g;
                         pos[i] += 1;
                     }
                     let (ls, le) = loops[i];
@@ -300,6 +376,10 @@ pub fn start() -> (Arc<Shared>, Result<u32>) {
                     master: 0.0,
                     gains: [1.0, 0.0],
                     trims: [1.0; SLOTS],
+                    eq: [EqSettings::default(); SLOTS],
+                    eq_state: [[[[0.0; 2]; 2]; MAX_EQ_STAGES]; SLOTS],
+                    eq_version: 0,
+                    eq_mix: [0.0; SLOTS],
                 };
                 let stream = device.build_output_stream::<f32, _, _>(
                     config,

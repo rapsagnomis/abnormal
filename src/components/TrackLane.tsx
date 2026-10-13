@@ -1,9 +1,10 @@
-import type { Region, Slot, TrackInfo } from "../lib/api";
+import type { Region, Section, Slot, TrackInfo } from "../lib/api";
 import { SLOT_LABELS } from "../lib/api";
 import { formatChannels, formatRate, formatTime } from "../lib/format";
 import type { Overlay } from "../lib/overlay";
 import type { View } from "../lib/view";
 import { Waveform } from "./Waveform";
+import type { Display } from "./Waveform";
 
 interface Props {
   slot: Slot;
@@ -14,6 +15,10 @@ interface Props {
   region: Region | null;
   view: View | null;
   overlay: Overlay | null;
+  display: Display;
+  sections: Section[] | null;
+  /** Playback EQ is being auditioned on this track. */
+  eqOn: boolean;
   /** Playback trim applied by loudness matching, dB (0 when off). */
   trimDb: number;
   active: boolean;
@@ -59,8 +64,13 @@ export function TrackLane(props: Props) {
             <span className="track-meta">{slot === 0 ? "Your track" : "Reference track"}</span>
           )}
         </div>
+        {track && props.eqOn && (
+          <span className="trim-badge" title="Suggested EQ is applied to playback (E)">
+            EQ
+          </span>
+        )}
         {track && Math.abs(trimDb) >= 0.05 && (
-          <span className="trim-badge" title="Loudness-match trim applied to playback">
+          <span className="trim-badge" title="Playback trim: loudness matching and EQ level compensation">
             {trimDb > 0 ? "+" : ""}
             {trimDb.toFixed(1)} dB
           </span>
@@ -98,6 +108,8 @@ export function TrackLane(props: Props) {
             region={region}
             view={props.view ?? { start: 0, end: track.duration }}
             overlay={props.overlay}
+            display={props.display}
+            sections={props.sections}
             onView={props.onView}
             onSeek={props.onSeek}
             onRegion={props.onRegion}

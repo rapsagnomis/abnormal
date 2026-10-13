@@ -1,5 +1,6 @@
 import type { Slot } from "../lib/api";
 import type { CurveMode } from "../lib/overlay";
+import type { Display } from "./Waveform";
 
 interface Props {
   playing: boolean;
@@ -19,6 +20,13 @@ interface Props {
   onToggleLinked: () => void;
   onCurveMode: (mode: CurveMode) => void;
   onToggleMatch: () => void;
+  display: Display;
+  onDisplay: (d: Display) => void;
+  /** Suggested EQ is playing on A. */
+  eqOn: boolean;
+  /** There are suggested moves to audition. */
+  eqAvailable: boolean;
+  onToggleEq: () => void;
 }
 
 const CURVES: [CurveMode, string, string][] = [
@@ -71,9 +79,29 @@ export function TransportBar(p: Props) {
         >
           Match
         </button>
+        <button
+          className={`toggle${p.eqOn ? " on" : ""}`}
+          onClick={p.onToggleEq}
+          disabled={!p.eqAvailable && !p.eqOn}
+          title="Audition the suggested EQ on A (E), level-compensated. Choose moves in the EQ match tab."
+        >
+          EQ
+        </button>
       </div>
 
       <div className="transport-group">
+        <div className="segmented" role="radiogroup" aria-label="Lane display (S toggles)">
+          {(
+            [
+              ["wave", "Wave", "Waveform"],
+              ["spectrogram", "Spec", "Spectrogram, 30 Hz–20 kHz (log), each track scaled to its own level"],
+            ] as [Display, string, string][]
+          ).map(([d, label, title]) => (
+            <button key={d} className={p.display === d ? "on" : ""} onClick={() => p.onDisplay(d)} title={`${title} (S toggles)`}>
+              {label}
+            </button>
+          ))}
+        </div>
         <span className="control-label">Curve</span>
         <div className="segmented" role="radiogroup" aria-label="Curve overlay (C cycles)">
           {CURVES.map(([mode, label, title]) => (

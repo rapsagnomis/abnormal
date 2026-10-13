@@ -1,5 +1,5 @@
-import type { AnalysisReport, EqReport, LibraryStatus, Region, Slot } from "../lib/api";
-import { describe, eqAsText, formatGain, formatHz, KIND_LABEL } from "../lib/eq";
+import type { AnalysisReport, EqFilter, EqReport, LibraryStatus, Region, Slot } from "../lib/api";
+import { curveOf, describe, eqAsText, formatGain, formatHz, KIND_LABEL } from "../lib/eq";
 import { formatTime } from "../lib/format";
 import { fmt, SECTIONS, showValue } from "../lib/metrics";
 import type { Section, Tab } from "../lib/metrics";
@@ -34,7 +34,18 @@ interface Props {
   /** Paths of the loaded tracks. */
   paths: [string | null, string | null];
   library: LibraryStatus | null;
+  /** Which suggested EQ moves are switched on (index-aligned with `eq.suggestions`). */
+  eqActive: boolean[];
+  /** Suggested EQ is being auditioned on A's playback. */
+  eqAudition: boolean;
+  /** Level compensation applied to A while auditioning, dB. */
+  eqCompensation: number;
+  /** Per suggested move: the passage of A where it matters most (null = none / still measuring). */
+  eqPassages: (Region | null)[];
   onTab: (tab: Tab) => void;
+  onEqActive: (index: number, on: boolean) => void;
+  onEqAudition: (on: boolean) => void;
+  onListen: (region: Region) => void;
   onScope: (scope: Scope) => void;
   onLoad: (slot: Slot, path: string) => void;
   onRescan: () => void;
@@ -85,7 +96,18 @@ export function AnalysisPanel(p: Props) {
       )}
 
       {p.tab === "eq" ? (
-        <EqView eq={p.eq} freqs={freqs} hasBoth={!!(ra && rb)} />
+        <EqView
+          eq={p.eq}
+          freqs={freqs}
+          hasBoth={!!(ra && rb)}
+          active={p.eqActive}
+          audition={p.eqAudition}
+          compensation={p.eqCompensation}
+          onActive={p.onEqActive}
+          onAudition={p.onEqAudition}
+          passages={p.eqPassages}
+          onListen={p.onListen}
+        />
       ) : p.tab === "similar" ? (
         <SimilarView reports={p.reports} paths={p.paths} status={p.library} onLoad={p.onLoad} onRescan={p.onRescan} />
       ) : (
@@ -229,11 +251,25 @@ function MetricsTable({ sections, reports, pending, loaded }: { sections: Sectio
   );
 }
 
-function EqView({ eq, freqs, hasBoth }: { eq: EqReport | null; freqs: number[]; hasBoth: boolean }) {
+interface EqViewProps {
+  eq: EqReport | null;
+  freqs: number[];
+  hasBoth: boolean;
+  active: boolean[];
+  audition: boolean;
+  compensation: number;
+  onActive: (index: number, on: boolean) => void;
+  onAudition: (on: boolean) => void;
+  passages: (Region | null)[];
+  onListen: (region: Region) => void;
+}
+
+function EqView({ eq, freqs, hasBoth, active, audition, compensation, onActive, onAudition, passages, onListen }: EqViewProps) {
   if (!hasBoth) {
     return <p className="chart-note">Load a track in A and a reference in B to get EQ suggestions.</p>;
   }
   if (!eq) return <p className="chart-note">Fitting…</p>;
+  const chosen: EqFilter[] = eq.suggestions.filter((_, i) => active[i] ?? true);
   return (
     <>
       <p className="chart-note">
@@ -246,21 +282,42 @@ function EqView({ eq, freqs, hasBoth }: { eq: EqReport | null; freqs: number[]; 
         <table className="metrics eq-table">
           <thead>
             <tr>
+              <th title="Include this move in the audition and the chart">On</th>
               <th>#</th>
               <th>Type</th>
               <th>Freq</th>
               <th>Gain</th>
               <th>Q</th>
+              <th />
             </tr>
           </thead>
           <tbody>
             {eq.suggestions.map((f, i) => (
-              <tr key={i} title={describe(f)}>
+              <tr key={i} title={describe(f)} className={active[i] ?? true ? "" : "off"}>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={active[i] ?? true}
+                    onChange={(e) => onActive(i, e.target.checked)}
+                    aria-label={`Use move ${i + 1}`}
+                  />
+                </td>
                 <td>{i + 1}</td>
                 <th>{KIND_LABEL[f.kind]}</th>
                 <td>{formatHz(f.freq)}</td>
                 <td>{formatGain(f.gain)}</td>
                 <td>{f.q.toFixed(1)}</td>
+                <td>
+                  {passages[i] && (
+                    <button
+                      className="listen"
+                      onClick={() => onListen(passages[i]!)}
+                      title={`Loop A at ${formatTime(passages[i]!.start)}–${formatTime(passages[i]!.end)}, where this move matters most`}
+                    >
+                      ▶
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -282,7 +339,7 @@ function EqView({ eq, freqs, hasBoth }: { eq: EqReport | null; freqs: number[]; 
         symmetric
         series={[
           { label: "Needed (B − A)", color: "var(--series-b)", values: eq.target, dashed: true },
-          { label: "Suggested EQ", color: "var(--series-a)", values: eq.curve },
+          { label: "Suggested EQ", color: "var(--series-a)", values: curveOf(chosen, freqs) },
         ]}
       />
       <div className="eq-footer">
@@ -290,9 +347,28 @@ function EqView({ eq, freqs, hasBoth }: { eq: EqReport | null; freqs: number[]; 
           Fit: {eq.errorBefore.toFixed(1)} → {eq.errorAfter.toFixed(1)} dB RMS left
         </span>
         {eq.suggestions.length > 0 && (
-          <button onClick={() => navigator.clipboard.writeText(eqAsText(eq.suggestions))}>Copy</button>
+          <button onClick={() => navigator.clipboard.writeText(eqAsText(chosen))} disabled={chosen.length === 0}>
+            Copy
+          </button>
         )}
       </div>
+      {eq.suggestions.length > 0 && (
+        <div className="eq-audition">
+          <button
+            className={`toggle${audition ? " on" : ""}`}
+            onClick={() => onAudition(!audition)}
+            disabled={chosen.length === 0}
+            title="Hear the selected moves on A's playback (E)"
+          >
+            {audition ? "Auditioning on A" : "Audition on A"}
+          </button>
+          <span className="chart-note">
+            {audition
+              ? `Level-compensated by ${formatGain(compensation)} so the EQ doesn't just sound louder. Switch A/B, or press E to compare with and without.`
+              : "Play A with the selected moves applied."}
+          </span>
+        </div>
+      )}
     </>
   );
 }

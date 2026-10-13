@@ -322,7 +322,7 @@ mod spectrum_and_stereo {
     use crate::stereo;
 
     /// Deterministic white noise (xorshift), uniform in ±amp.
-    fn noise(seed: u64, len: usize, amp: f32) -> Vec<f32> {
+    pub(super) fn noise(seed: u64, len: usize, amp: f32) -> Vec<f32> {
         let mut x = seed;
         (0..len)
             .map(|_| {
@@ -443,9 +443,123 @@ mod spectrum_and_stereo {
     }
 }
 
+mod structure_and_activity {
+    use std::f64::consts::PI;
+
+    use super::spectrum_and_stereo::noise;
+    use crate::decode::AudioData;
+    use crate::{activity, sections, spectrogram};
+
+    const RATE: u32 = 44100;
+
+    fn tone(freq: f64, secs: f64, amp: f64) -> Vec<f32> {
+        (0..(secs * RATE as f64) as usize)
+            .map(|i| (amp * (2.0 * PI * freq * i as f64 / RATE as f64).sin()) as f32)
+            .collect()
+    }
+
+    fn mono(samples: Vec<f32>) -> AudioData {
+        AudioData { sample_rate: RATE, channels: vec![samples] }
+    }
+
+    #[test]
+    fn spectrogram_shows_a_tone_in_its_row() {
+        let a = mono(tone(1000.0, 4.0, 0.5));
+        let (cols, rows) = (8, 64);
+        let img = spectrogram::compute(&a, 0, a.frames(), cols, rows);
+        assert_eq!(img.len(), cols * rows);
+        // Row 0 is the top (highest frequency); find the brightest row of a middle column.
+        let col = |c: usize| (0..rows).map(|r| img[r * cols + c]).collect::<Vec<u8>>();
+        let mid = col(cols / 2);
+        let brightest = (0..rows).max_by_key(|&r| mid[r]).unwrap();
+        let ratio = (spectrogram::MAX_HZ / spectrogram::MIN_HZ).powf(1.0 / rows as f64);
+        let (lo, hi) = {
+            let band = rows - 1 - brightest;
+            (spectrogram::MIN_HZ * ratio.powi(band as i32), spectrogram::MIN_HZ * ratio.powi(band as i32 + 1))
+        };
+        assert!(lo <= 1000.0 * 1.15 && hi >= 1000.0 / 1.15, "brightest row {lo:.0}–{hi:.0} Hz");
+        // A −6 dBFS sine sits far above the floor; rows far from it are dark.
+        assert!(mid[brightest] > 200, "{}", mid[brightest]);
+        assert!(mid[0] < mid[brightest] / 2 && mid[rows - 1] < mid[brightest] / 2);
+    }
+
+    #[test]
+    fn spectrogram_of_silence_is_black() {
+        let a = mono(vec![0.0; RATE as usize * 2]);
+        assert!(spectrogram::compute(&a, 0, a.frames(), 16, 16).iter().all(|&v| v == 0));
+    }
+
+    /// Quiet tone, loud noise, quiet tone again: an A B A song.
+    fn aba() -> AudioData {
+        let mut s = tone(220.0, 20.0, 0.1);
+        s.extend(noise(7, 20 * RATE as usize, 0.4));
+        s.extend(tone(220.0, 20.0, 0.1));
+        mono(s)
+    }
+
+    #[test]
+    fn sections_split_and_label_an_aba_form() {
+        let a = aba();
+        let s = sections::analyze(&a, 0, a.frames());
+        assert_eq!(s.len(), 3, "{s:?}");
+        assert!((s[1].start - 20.0).abs() < 1.5 && (s[2].start - 40.0).abs() < 1.5, "{s:?}");
+        assert_eq!((s[0].label, s[1].label, s[2].label), (0, 1, 0));
+        assert!(s[1].level > s[0].level + 6.0, "noise section is louder: {s:?}");
+        assert_eq!(s[0].start, 0.0);
+        assert!((s[2].end - 60.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn short_or_steady_audio_is_one_section() {
+        let a = mono(tone(440.0, 10.0, 0.3));
+        let s = sections::analyze(&a, 0, a.frames());
+        assert_eq!(s.len(), 1);
+        let steady = mono(noise(3, 60 * RATE as usize, 0.3));
+        assert_eq!(sections::analyze(&steady, 0, steady.frames()).len(), 1);
+    }
+
+    #[test]
+    fn band_activity_puts_a_tone_in_one_band_and_gates_silence() {
+        // Bands are half-octaves from 31.25 Hz, so 1189 Hz sits mid-band (1000–1414 Hz).
+        let mut s = tone(1189.0, 6.0, 0.5);
+        s.extend(vec![0.0; 3 * RATE as usize]);
+        let a = mono(s);
+        let r = activity::analyze(&a, 0, a.frames());
+        assert_eq!(r.levels.len(), r.bands.len());
+        let band = r.bands.iter().position(|b| (b[0]..b[1]).contains(&1189.0)).unwrap();
+        // Mid-tone: nearly all of the moment's energy is in the tone's band.
+        let c = 4;
+        let level = r.levels[band][c].unwrap();
+        assert!(level > -1.0 && level < 0.5, "{level}");
+        let other = r.levels[0][c].unwrap();
+        assert!(other < -40.0, "{other}");
+        // The silent tail has no readings.
+        assert!(r.levels[band].last().unwrap().is_none());
+        assert!((r.t0 - 0.25).abs() < 1e-9 && r.hop == activity::CELL_SECONDS);
+    }
+}
+
 mod eq {
     use crate::eq::{Filter, FilterKind, suggest};
     use crate::spectrum::grid;
+
+    #[test]
+    fn biquads_match_their_analog_prototypes() {
+        let rate = 48000.0;
+        for f in [
+            Filter { kind: FilterKind::Peak, freq: 1000.0, gain: 4.0, q: 1.0 },
+            Filter { kind: FilterKind::Peak, freq: 80.0, gain: -3.0, q: 0.7 },
+            Filter { kind: FilterKind::LowShelf, freq: 200.0, gain: -3.0, q: 0.707 },
+            Filter { kind: FilterKind::HighShelf, freq: 3000.0, gain: 2.5, q: 0.707 },
+        ] {
+            let bq = f.biquad(rate);
+            // The bilinear transform warps frequencies near Nyquist; compare where it doesn't.
+            for hz in [30.0, 100.0, 300.0, 1000.0, 2000.0, 4000.0] {
+                let (digital, analog) = (bq.response_db(hz, rate), f.response_db(hz));
+                assert!((digital - analog).abs() < 0.25, "{f:?} at {hz} Hz: {digital:.2} vs {analog:.2}");
+            }
+        }
+    }
 
     /// A "reference" that is the flat track plus the given filters.
     fn shaped(filters: &[Filter]) -> (Vec<f64>, Vec<f32>, Vec<f32>) {
@@ -583,4 +697,25 @@ fn library_real_folder() {
     assert!(lib.search(&name, 50).iter().any(|t| t.path == path), "search {name}");
     assert!(matches[0].score > 99.0);
     let _ = std::fs::remove_file(db);
+}
+
+/// Sections, band activity and spectrogram timings for a real file:
+/// `SONIC_SECTIONS_FILE=song.flac cargo test sections_real_file -- --nocapture`.
+#[test]
+fn sections_real_file() {
+    let Some(path) = std::env::var_os("SONIC_SECTIONS_FILE") else { return };
+    let audio = decode_file(std::path::Path::new(&path)).unwrap();
+    let t = std::time::Instant::now();
+    let sections = crate::sections::analyze(&audio, 0, audio.frames());
+    println!("sections: {:.2?}", t.elapsed());
+    for s in &sections {
+        let label = (b'A' + s.label as u8) as char;
+        println!("  {label}  {:6.1}–{:6.1} s  {:+.1} dB", s.start, s.end, s.level);
+    }
+    let t = std::time::Instant::now();
+    crate::activity::analyze(&audio, 0, audio.frames());
+    println!("band activity: {:.2?}", t.elapsed());
+    let t = std::time::Instant::now();
+    crate::spectrogram::compute(&audio, 0, audio.frames(), 1600, 200);
+    println!("spectrogram 1600×200: {:.2?}", t.elapsed());
 }

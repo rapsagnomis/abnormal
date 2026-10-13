@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import type { Peaks, Region, Slot } from "../lib/api";
+import type { Peaks, Region, Section, Slot } from "../lib/api";
 import { formatTime, tickStep } from "../lib/format";
 import type { Overlay } from "../lib/overlay";
+import { sectionName } from "../lib/sections";
+import { ceilingOf, freqToY, renderSpectrogram } from "../lib/spectrogram";
 import type { View } from "../lib/view";
 import { isFull, panView, zoomView } from "../lib/view";
 
@@ -15,10 +17,15 @@ interface Props {
   region: Region | null;
   /** Curve drawn over the waveform (loudness, PSR), or null for none. */
   overlay: Overlay | null;
+  display: Display;
+  /** Detected song sections, drawn as a clickable strip; null while detecting. */
+  sections: Section[] | null;
   onSeek: (seconds: number) => void;
   onRegion: (region: Region | null) => void;
   onView: (view: View) => void;
 }
+
+export type Display = "wave" | "spectrogram";
 
 /** Pointer movement (px) before a press becomes a region drag instead of a click-to-seek. */
 const DRAG_THRESHOLD = 4;
@@ -31,14 +38,30 @@ interface PeakSource {
   peaks: Peaks;
 }
 
+/** A rendered spectrogram covering [start, end] seconds. */
+interface SpecImage {
+  start: number;
+  end: number;
+  image: HTMLCanvasElement;
+}
+
+/** Whole-track spectrogram resolution: shown while a view's detail image loads. */
+const SPEC_OVERVIEW = { columns: 1024, rows: 128 };
+const SPEC_MAX = { columns: 2048, rows: 256 };
+const SPEC_LABELS = [100, 1000, 10000];
+
 export function Waveform(props: Props) {
-  const { slot, peaks, duration, view, position, region, overlay } = props;
+  const { slot, peaks, duration, view, position, region, overlay, display, sections } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [draft, setDraft] = useState<Region | null>(null);
   const [detail, setDetail] = useState<PeakSource | null>(null);
   const press = useRef<{ x: number; t: number; dragging: boolean } | null>(null);
+  const [specOverview, setSpecOverview] = useState<SpecImage | null>(null);
+  const [specDetail, setSpecDetail] = useState<SpecImage | null>(null);
+  /** Display ceiling (byte level) for this track, from the overview, so zooming keeps the scale. */
+  const [specCeiling, setSpecCeiling] = useState<number | null>(null);
 
   // Handlers attached natively (wheel must be non-passive) read the latest props from here.
   const latest = useRef(props);
@@ -79,6 +102,54 @@ export function Waveform(props: Props) {
     };
   }, [slot, peaks, duration, view.start, view.end, size.width]);
 
+  // A new track starts with no spectrogram.
+  useEffect(() => {
+    setSpecOverview(null);
+    setSpecDetail(null);
+    setSpecCeiling(null);
+  }, [slot, peaks]);
+
+  useEffect(() => {
+    if (display !== "spectrogram" || specOverview) return;
+    let cancelled = false;
+    const { columns, rows } = SPEC_OVERVIEW;
+    api
+      .spectrogram(slot, 0, duration, columns, rows)
+      .then((data) => {
+        if (cancelled) return;
+        const ceiling = ceilingOf(data);
+        setSpecCeiling(ceiling);
+        setSpecOverview({ start: 0, end: duration, image: renderSpectrogram(data, columns, rows, ceiling) });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [display, specOverview, slot, duration]);
+
+  // Detail at screen resolution for the visible window.
+  useEffect(() => {
+    if (display !== "spectrogram" || specCeiling === null) return;
+    const dpr = window.devicePixelRatio || 1;
+    const end = Math.min(view.end, duration);
+    const columns = Math.min(SPEC_MAX.columns, Math.round(size.width * dpr * ((end - view.start) / (view.end - view.start))));
+    const rows = Math.min(SPEC_MAX.rows, Math.round(size.height * dpr));
+    if (columns < 1 || rows < 1 || end <= view.start) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const data = await api.spectrogram(slot, view.start, end, columns, rows);
+        if (!cancelled) setSpecDetail({ start: view.start, end, image: renderSpectrogram(data, columns, rows, specCeiling) });
+      } catch {
+        // Track was unloaded mid-request.
+      }
+    }, 60);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [display, specCeiling, slot, duration, view.start, view.end, size.width, size.height]);
+
   useEffect(() => {
     const canvas = canvasRef.current!;
     const dpr = window.devicePixelRatio || 1;
@@ -90,10 +161,11 @@ export function Waveform(props: Props) {
       canvas.height = h;
     }
     const overview = { start: 0, end: duration, peaks };
-    draw(canvas, view, duration, overview, detail, overlay, dpr);
+    const spec = display === "spectrogram" ? [specOverview, specDetail] : null;
+    draw(canvas, view, duration, overview, detail, overlay, dpr, spec);
     // view.start/end rather than view: callers may pass a fresh object every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [peaks, duration, view.start, view.end, detail, overlay, size]);
+  }, [peaks, duration, view.start, view.end, detail, overlay, size, display, specOverview, specDetail]);
 
   // Wheel: vertical zooms around the cursor (pinch arrives as ctrl+wheel), horizontal pans.
   useEffect(() => {
@@ -181,6 +253,7 @@ export function Waveform(props: Props) {
         )}
         {playheadVisible && <div className="playhead" style={{ left: pct(position) }} />}
       </div>
+      <SectionStrip sections={sections} view={view} region={region} onRegion={props.onRegion} />
       <div className="ruler">
         {ticks.map((t) => (
           <span key={t.toFixed(3)} style={{ left: pct(t) }}>
@@ -191,6 +264,53 @@ export function Waveform(props: Props) {
       {!isFull(view, duration) && (
         <Scrollbar view={view} duration={duration} onView={props.onView} />
       )}
+    </div>
+  );
+}
+
+/**
+ * Detected sections as blocks along the time axis. Click selects (and loops) a section;
+ * Shift+click extends the current selection to include it.
+ */
+function SectionStrip({
+  sections,
+  view,
+  region,
+  onRegion,
+}: {
+  sections: Section[] | null;
+  view: View;
+  region: Region | null;
+  onRegion: (r: Region | null) => void;
+}) {
+  const span = view.end - view.start;
+  if (!sections) return <div className="section-strip pending" />;
+  const pick = (s: Section, e: React.MouseEvent) => {
+    if (e.shiftKey && region) {
+      onRegion({ start: Math.min(region.start, s.start), end: Math.max(region.end, s.end) });
+    } else {
+      onRegion({ start: s.start, end: s.end });
+    }
+  };
+  return (
+    <div className="section-strip">
+      {sections.map((s, i) => {
+        if (s.end <= view.start || s.start >= view.end) return null;
+        const left = ((Math.max(s.start, view.start) - view.start) / span) * 100;
+        const right = ((Math.min(s.end, view.end) - view.start) / span) * 100;
+        const selected = !!region && Math.abs(region.start - s.start) < 0.01 && Math.abs(region.end - s.end) < 0.01;
+        return (
+          <button
+            key={i}
+            className={`section-block label-${s.label < 8 ? s.label : "other"}${selected ? " on" : ""}`}
+            style={{ left: `${left}%`, width: `${right - left}%` }}
+            onClick={(e) => pick(s, e)}
+            title={`Section ${sectionName(s.label)} · ${formatTime(s.start)}–${formatTime(s.end)} · ${s.level >= 0 ? "+" : ""}${s.level.toFixed(1)} dB vs track average\nClick to select, Shift+click to extend`}
+          >
+            {sectionName(s.label)}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -250,6 +370,7 @@ function draw(
   detail: PeakSource | null,
   overlay: Overlay | null,
   dpr: number,
+  spec: (SpecImage | null)[] | null,
 ) {
   const ctx = canvas.getContext("2d")!;
   const { width: w, height: h } = canvas;
@@ -261,6 +382,12 @@ function draw(
   const scale = mid * 0.95;
   const span = view.end - view.start;
   const secPerPx = span / w;
+
+  if (spec) {
+    drawSpectrogram(ctx, spec, view, w, h, dpr, color);
+    if (overlay) drawOverlay(ctx, overlay, view, duration, w, h, dpr, color, true);
+    return;
+  }
 
   ctx.fillStyle = color("--wave-axis");
   ctx.fillRect(0, Math.floor(mid), w, 1);
@@ -291,6 +418,36 @@ function draw(
   if (overlay) drawOverlay(ctx, overlay, view, duration, w, h, dpr, color);
 }
 
+/** Images in order (overview first, then detail on top), each placed at its time range. */
+function drawSpectrogram(
+  ctx: CanvasRenderingContext2D,
+  images: (SpecImage | null)[],
+  view: View,
+  w: number,
+  h: number,
+  dpr: number,
+  color: (name: string) => string,
+) {
+  const span = view.end - view.start;
+  const xAt = (t: number) => ((t - view.start) / span) * w;
+  ctx.imageSmoothingEnabled = true;
+  for (const img of images) {
+    if (!img) continue;
+    const x0 = xAt(img.start);
+    ctx.drawImage(img.image, x0, 0, xAt(img.end) - x0, h);
+  }
+  ctx.font = `${10 * dpr}px -apple-system, sans-serif`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  for (const f of SPEC_LABELS) {
+    const y = Math.round(freqToY(f) * h) + 0.5;
+    ctx.fillStyle = color("--curve-grid");
+    ctx.fillRect(0, y, w, dpr);
+    ctx.fillStyle = color("--curve-label");
+    ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}`, 4 * dpr, y - 6 * dpr);
+  }
+}
+
 function drawOverlay(
   ctx: CanvasRenderingContext2D,
   overlay: Overlay,
@@ -300,6 +457,8 @@ function drawOverlay(
   h: number,
   dpr: number,
   color: (name: string) => string,
+  /** Draw a dark casing under the curve so it stays visible on bright backgrounds. */
+  cased = false,
 ) {
   const span = view.end - view.start;
   const xAt = (t: number) => ((t - view.start) / span) * w;
@@ -338,8 +497,6 @@ function drawOverlay(
   const i0 = Math.max(0, Math.floor((view.start - t0) / hop) - 1);
   const i1 = Math.min(values.length - 1, Math.ceil((view.end - t0) / hop) + 1);
   if (i1 < i0) return;
-  ctx.strokeStyle = color("--curve");
-  ctx.lineWidth = 1.5 * dpr;
   ctx.lineJoin = "round";
   ctx.beginPath();
   // Null points (no reading) break the line into separate runs.
@@ -355,5 +512,12 @@ function drawOverlay(
     else ctx.moveTo(x, yAt(v));
     penDown = true;
   }
+  if (cased) {
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.lineWidth = 3.5 * dpr;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = color("--curve");
+  ctx.lineWidth = 1.5 * dpr;
   ctx.stroke();
 }

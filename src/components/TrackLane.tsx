@@ -1,4 +1,5 @@
-import type { Region, Section, Slot, TrackInfo } from "../lib/api";
+import type { Region, Section, Slot, SongStructure, StructureSegment, TrackInfo } from "../lib/api";
+import type { Part } from "../lib/structure";
 import { SLOT_LABELS } from "../lib/api";
 import { formatChannels, formatRate, formatTime } from "../lib/format";
 import type { Overlay } from "../lib/overlay";
@@ -17,6 +18,12 @@ interface Props {
   overlay: Overlay | null;
   display: Display;
   sections: Section[] | null;
+  structure: SongStructure | null;
+  /** The structure model is analysing this track. */
+  structurePending: boolean;
+  onPart: (part: Part) => void;
+  onPartsEdit: (segments: StructureSegment[]) => void;
+  onPartsReset: () => void;
   /** Playback EQ is being auditioned on this track. */
   eqOn: boolean;
   /** Playback trim applied by loudness matching, dB (0 when off). */
@@ -58,6 +65,16 @@ export function TrackLane(props: Props) {
               <span className="track-meta">
                 {formatRate(track.sampleRate)} · {formatChannels(track.channels)} ·{" "}
                 {formatTime(track.duration)}
+                {props.structure?.bpm != null && ` · ${Math.round(props.structure.bpm)} BPM`}
+                {props.structurePending && (
+                  <span
+                    className="structure-pending"
+                    title="Finding tempo, bars and song parts (intro, verse, chorus…) with All-In-One: about half a minute"
+                  >
+                    {" "}
+                    · analysing structure…
+                  </span>
+                )}
               </span>
             </>
           ) : (
@@ -110,6 +127,10 @@ export function TrackLane(props: Props) {
             overlay={props.overlay}
             display={props.display}
             sections={props.sections}
+            structure={props.structure}
+            onPart={props.onPart}
+            onPartsEdit={props.onPartsEdit}
+            onPartsReset={props.onPartsReset}
             onView={props.onView}
             onSeek={props.onSeek}
             onRegion={props.onRegion}

@@ -1,4 +1,4 @@
-import type { AnalysisReport, EqFilter, EqReport, LibraryStatus, Region, Slot } from "../lib/api";
+import type { AnalysisReport, EqFilter, EqReport, LibraryStatus, Region, Slot, SongStructure, StructureSetup } from "../lib/api";
 import { curveOf, describe, eqAsText, formatGain, formatHz, KIND_LABEL } from "../lib/eq";
 import { formatTime } from "../lib/format";
 import { fmt, SECTIONS, showValue } from "../lib/metrics";
@@ -7,6 +7,7 @@ import { FrequencyChart } from "./FrequencyChart";
 import { Goniometer } from "./Goniometer";
 import { HistogramChart } from "./HistogramChart";
 import { LibraryView } from "./LibraryView";
+import { PartsTable } from "./PartsTable";
 
 export type Scope = "full" | "selection";
 export type { Tab };
@@ -48,6 +49,12 @@ interface Props {
   onScope: (scope: Scope) => void;
   onLoad: (slot: Slot, path: string) => void;
   onRescan: () => void;
+  /** Whole-track reports, whatever is being measured. */
+  fullReports: [AnalysisReport | null, AnalysisReport | null];
+  structures: [SongStructure | null, SongStructure | null];
+  structurePending: [boolean, boolean];
+  structureSetup: StructureSetup | null;
+  onStructureInstall: () => void;
 }
 
 
@@ -127,6 +134,14 @@ export function AnalysisPanel(p: Props) {
               histogram: r?.dynamics.crestHistogram ?? null,
               marker: r?.dynamics.stats.crestShortMedian ?? null,
             }))}
+          />
+          <PartsTable
+            structures={p.structures}
+            fullReports={p.fullReports}
+            paths={p.paths}
+            pending={p.structurePending}
+            setup={p.structureSetup}
+            onInstall={p.onStructureInstall}
           />
         </>
       )}

@@ -175,6 +175,39 @@ export interface LibraryMatch extends LibraryTrack {
   stereo: number | null;
 }
 
+/** A song part from the structure model (All-In-One). */
+export interface StructureSegment {
+  start: number;
+  end: number;
+  /** "start" / "end" (silence), "intro", "verse", "chorus", "bridge", "inst", "solo", "break", "outro". */
+  label: string;
+}
+
+export interface SongStructure {
+  bpm: number | null;
+  beats: number[];
+  /** First beat of each bar. */
+  downbeats: number[];
+  beatPositions: number[];
+  segments: StructureSegment[];
+  /** The segments are the user's corrections rather than what was detected. */
+  edited: boolean;
+}
+
+export interface StructureSetup {
+  installed: boolean;
+  installing: boolean;
+  step: string | null;
+  error: string | null;
+}
+
+/** `structure` event: an analysis finished (or failed). */
+export interface StructureOutcome {
+  path: string;
+  structure: SongStructure | null;
+  error: string | null;
+}
+
 /** Headless Deemix (Deezer search and downloads) state. */
 export interface DeezerStatus {
   /** Deemix is in /Applications. */
@@ -303,6 +336,13 @@ export const api = {
   similarTracks: (features: Features, exclude: string[], weights: MatchWeights, limit: number) =>
     invoke<LibraryMatch[]>("similar_tracks", { features, exclude, weights, limit }),
   searchLibrary: (query: string, limit: number) => invoke<LibraryTrack[]>("search_library", { query, limit }),
+  structureStatus: () => invoke<StructureSetup>("structure_status"),
+  structureInstall: () => invoke<void>("structure_install"),
+  /** Cached structure, or null (then it's queued; the result comes as a `structure` event). */
+  songStructure: (path: string) => invoke<SongStructure | null>("song_structure", { path }),
+  saveStructureEdit: (path: string, segments: StructureSegment[]) =>
+    invoke<SongStructure>("save_structure_edit", { path, segments }),
+  resetStructureEdit: (path: string) => invoke<SongStructure | null>("reset_structure_edit", { path }),
   deezerConnect: () => invoke<DeezerStatus>("deezer_connect"),
   deezerLogin: (arl: string) => invoke<DeezerStatus>("deezer_login", { arl }),
   deezerSearch: (query: string, limit: number) => invoke<DeezerTrack[]>("deezer_search", { query, limit }),

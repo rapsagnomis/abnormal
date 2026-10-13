@@ -740,3 +740,40 @@ fn deemix_search() {
     deemix.shutdown();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Sets up the song-structure environment (if needed) and analyses files, exactly as the app
+/// does: `SONIC_STRUCTURE_FILE=a.flac[:b.flac…] [SONIC_STRUCTURE_ROOT=dir] cargo test
+/// structure_real_file -- --nocapture`. Several files are queued at once, so their stages
+/// overlap (stems of the next while the model runs on the previous). Without a root, a
+/// temporary one is used (slow: full install).
+#[test]
+fn structure_real_file() {
+    let Some(files) = std::env::var_os("SONIC_STRUCTURE_FILE") else { return };
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let root = std::env::var_os("SONIC_STRUCTURE_ROOT").map_or_else(|| std::env::temp_dir().join("abnormal-structure-test"), PathBuf::from);
+    let engine = std::sync::Arc::new(crate::structure::Engine::new(home, root));
+    let t = std::time::Instant::now();
+    engine.install(&|s| println!("setup: {s:?}"));
+    let status = engine.status();
+    assert!(status.installed, "install failed: {:?}", status.error);
+    println!("setup took {:.0?}", t.elapsed());
+
+    let paths: Vec<PathBuf> = std::env::split_paths(&files).collect();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let t = std::time::Instant::now();
+    for path in &paths {
+        let tx = tx.clone();
+        engine.request(path.clone(), std::sync::Arc::new(move |o| tx.send(o.clone()).unwrap()));
+    }
+    for _ in &paths {
+        let outcome = rx.recv().unwrap();
+        println!("{} done after {:.0?}", outcome.path, t.elapsed());
+        let s = outcome.structure.unwrap_or_else(|| panic!("{:?}", outcome.error));
+        println!("bpm {:?}, {} beats, {} bars", s.bpm, s.beats.len(), s.downbeats.len());
+        for seg in &s.segments {
+            println!("  {:6.1}–{:6.1}  {}", seg.start, seg.end, seg.label);
+        }
+        assert!(!s.segments.is_empty());
+        assert!(engine.cached(std::path::Path::new(&outcome.path)).is_some(), "result should be cached");
+    }
+}

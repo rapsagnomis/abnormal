@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import type { Peaks, Region, Section, Slot } from "../lib/api";
+import type { Peaks, Region, Section, Slot, SongStructure, StructureSegment } from "../lib/api";
 import { formatTime, tickStep } from "../lib/format";
 import type { Overlay } from "../lib/overlay";
 import { sectionName } from "../lib/sections";
+import { EDIT_LABELS, moveBoundary, partColor, partName, partsOf, rename, snapToBar } from "../lib/structure";
+import type { Part } from "../lib/structure";
 import { ceilingOf, freqToY, renderSpectrogram } from "../lib/spectrogram";
 import type { View } from "../lib/view";
 import { isFull, panView, zoomView } from "../lib/view";
@@ -20,6 +22,13 @@ interface Props {
   display: Display;
   /** Detected song sections, drawn as a clickable strip; null while detecting. */
   sections: Section[] | null;
+  /** Labelled song parts from the structure model; shown instead of `sections` when present. */
+  structure: SongStructure | null;
+  /** A labelled part was clicked (without Shift): select it, and the matching part in the other track. */
+  onPart: (part: Part) => void;
+  /** The user corrected the parts (moved a border, renamed one). */
+  onPartsEdit: (segments: StructureSegment[]) => void;
+  onPartsReset: () => void;
   onSeek: (seconds: number) => void;
   onRegion: (region: Region | null) => void;
   onView: (view: View) => void;
@@ -253,7 +262,19 @@ export function Waveform(props: Props) {
         )}
         {playheadVisible && <div className="playhead" style={{ left: pct(position) }} />}
       </div>
-      <SectionStrip sections={sections} view={view} region={region} onRegion={props.onRegion} />
+      {props.structure ? (
+        <PartStrip
+          structure={props.structure}
+          view={view}
+          region={region}
+          onRegion={props.onRegion}
+          onPart={props.onPart}
+          onEdit={props.onPartsEdit}
+          onReset={props.onPartsReset}
+        />
+      ) : (
+        <SectionStrip sections={sections} view={view} region={region} onRegion={props.onRegion} />
+      )}
       <div className="ruler">
         {ticks.map((t) => (
           <span key={t.toFixed(3)} style={{ left: pct(t) }}>
@@ -311,6 +332,156 @@ function SectionStrip({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** Boundary drags snap to a bar line within this many pixels (hold Alt to place freely). */
+const SNAP_PX = 10;
+/** A dragged boundary stays at least this far from its neighbours' other ends, seconds. */
+const MIN_PART_SECONDS = 1;
+
+/**
+ * Labelled song parts (intro, verse, chorus…) from the structure model. Click selects a part
+ * and the same part in the other track (2nd chorus ↔ 2nd chorus), so every tab compares like
+ * with like; Shift+click extends this track's selection. Corrections: drag the line between
+ * two parts (snaps to bars), click a selected part (or double-click) to rename it.
+ */
+function PartStrip({
+  structure,
+  view,
+  region,
+  onRegion,
+  onPart,
+  onEdit,
+  onReset,
+}: {
+  structure: SongStructure;
+  view: View;
+  region: Region | null;
+  onRegion: (r: Region | null) => void;
+  onPart: (p: Part) => void;
+  onEdit: (segments: StructureSegment[]) => void;
+  onReset: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  /** Boundary being dragged: index of the part before it, and where it is now. */
+  const [drag, setDrag] = useState<{ index: number; time: number } | null>(null);
+  /** Part whose name picker is open. */
+  const [naming, setNaming] = useState<number | null>(null);
+  const span = view.end - view.start;
+  const detected = partsOf(structure);
+  const parts = drag ? partsOf({ ...structure, segments: moveBoundary(detected, drag.index, drag.time) }) : detected;
+
+  // Close the name picker on Escape or a click elsewhere.
+  useEffect(() => {
+    if (naming === null) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      if (e instanceof MouseEvent && ref.current?.contains(e.target as Node)) return;
+      setNaming(null);
+    };
+    window.addEventListener("keydown", close, true);
+    window.addEventListener("mousedown", close, true);
+    return () => {
+      window.removeEventListener("keydown", close, true);
+      window.removeEventListener("mousedown", close, true);
+    };
+  }, [naming]);
+
+  const timeAt = (clientX: number, alt: boolean) => {
+    const rect = ref.current!.getBoundingClientRect();
+    const t = view.start + ((clientX - rect.left) / rect.width) * span;
+    return alt ? t : snapToBar(structure, t, (SNAP_PX / rect.width) * span);
+  };
+  const dragTo = (index: number, e: React.PointerEvent) => {
+    const lo = detected[index].start + MIN_PART_SECONDS;
+    const hi = detected[index + 1].end - MIN_PART_SECONDS;
+    setDrag({ index, time: Math.min(hi, Math.max(lo, timeAt(e.clientX, e.altKey))) });
+  };
+  const pct = (t: number) => `${((t - view.start) / span) * 100}%`;
+  const isSelected = (p: Part) => !!region && Math.abs(region.start - p.start) < 0.01 && Math.abs(region.end - p.end) < 0.01;
+
+  return (
+    <div className="section-strip" ref={ref}>
+      {parts.map((p, i) => {
+        if (p.end <= view.start || p.start >= view.end) return null;
+        const left = Math.max(p.start, view.start);
+        const right = Math.min(p.end, view.end);
+        const selected = isSelected(p);
+        return (
+          <button
+            key={`p${i}`}
+            className={`section-block label-${partColor(p.label)}${selected ? " on" : ""}`}
+            style={{ left: pct(left), width: `${((right - left) / span) * 100}%` }}
+            onClick={(e) => {
+              if (e.shiftKey && region) onRegion({ start: Math.min(region.start, p.start), end: Math.max(region.end, p.end) });
+              else if (selected) setNaming(i);
+              else onPart(p);
+            }}
+            onDoubleClick={() => setNaming(i)}
+            title={`${partName(p)} · ${formatTime(p.start)}–${formatTime(p.end)}${structure.edited ? " · edited" : ""}\nClick to select it here and in the other track, click again to rename, Shift+click to extend. Drag a border to move it.`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+      {detected.slice(0, -1).map((p, i) => {
+        const next = detected[i + 1];
+        // Only parts that touch share a draggable border.
+        if (Math.abs(next.start - p.end) > 0.05) return null;
+        const at = drag?.index === i ? drag.time : p.end;
+        if (at <= view.start || at >= view.end) return null;
+        return (
+          <div
+            key={`b${i}`}
+            className={`part-boundary${drag?.index === i ? " dragging" : ""}`}
+            style={{ left: pct(at) }}
+            title="Drag to move this border (snaps to bars, hold Alt to place freely)"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.currentTarget.setPointerCapture(e.pointerId);
+              dragTo(i, e);
+            }}
+            onPointerMove={(e) => drag?.index === i && dragTo(i, e)}
+            onPointerUp={() => {
+              if (drag && Math.abs(drag.time - detected[drag.index].end) > 0.01) onEdit(moveBoundary(detected, drag.index, drag.time));
+              setDrag(null);
+            }}
+            onPointerCancel={() => setDrag(null)}
+          />
+        );
+      })}
+      {naming !== null && parts[naming] && (
+        <div className="part-names" style={{ left: pct(Math.max(parts[naming].start, view.start)) }} role="menu">
+          {EDIT_LABELS.map((label) => (
+            <button
+              key={label}
+              role="menuitem"
+              className={`label-${partColor(label)}${parts[naming].label === label ? " on" : ""}`}
+              onClick={() => {
+                onEdit(rename(parts, naming, label));
+                setNaming(null);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          {structure.edited && (
+            <button
+              className="reset"
+              role="menuitem"
+              title="Forget all corrections to this track's parts"
+              onClick={() => {
+                onReset();
+                setNaming(null);
+              }}
+            >
+              Reset to detected
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

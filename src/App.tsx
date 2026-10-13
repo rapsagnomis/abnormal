@@ -13,6 +13,10 @@ import type {
   Region,
   Section,
   Slot,
+  SongStructure,
+  StructureOutcome,
+  StructureSegment,
+  StructureSetup,
   TrackInfo,
   Transport,
 } from "./lib/api";
@@ -29,6 +33,8 @@ import type { Scope, Tab } from "./components/AnalysisPanel";
 import { overlayFor } from "./lib/overlay";
 import type { CurveMode } from "./lib/overlay";
 import { reportJson, reportMarkdown } from "./lib/report";
+import { matchingPart } from "./lib/structure";
+import type { Part } from "./lib/structure";
 import "./App.css";
 
 type Pair<T> = [T, T];
@@ -76,10 +82,14 @@ export default function App() {
   const [eqAudition, setEqAudition] = useState(false);
   const [eqActive, setEqActive] = useState<boolean[]>([]);
   const [activity, setActivity] = useState<Pair<BandActivity | null>>(pair(null));
+  /** Song parts, tempo and bars from the structure model (null until analysed). */
+  const [structures, setStructures] = useState<Pair<SongStructure | null>>(pair(null));
+  const [structurePending, setStructurePending] = useState<Pair<boolean>>(pair(false));
+  const [structureSetup, setStructureSetup] = useState<StructureSetup | null>(null);
 
   // Latest state for event handlers registered once (keyboard, drag & drop).
-  const latest = useRef({ tracks, regions, views, transport, linked });
-  latest.current = { tracks, regions, views, transport, linked };
+  const latest = useRef({ tracks, regions, views, transport, linked, structures, structureSetup });
+  latest.current = { tracks, regions, views, transport, linked, structures, structureSetup };
   /** Incremented per load so results for a replaced track are discarded. */
   const loadSeq = useRef<Pair<number>>([0, 0]);
 
@@ -95,6 +105,43 @@ export default function App() {
       unlisten.then((fn) => fn());
     };
   }, []);
+
+  /** Ask for a loaded track's structure: cached ones come back at once, others are queued. */
+  const requestStructure = useCallback(async (slot: Slot, path: string) => {
+    const seq = loadSeq.current[slot];
+    const found = await api.songStructure(path).catch(() => null);
+    if (seq !== loadSeq.current[slot]) return;
+    setStructures((s) => setAt(s, slot, found));
+    setStructurePending((p) => setAt(p, slot, !found && !!latest.current.structureSetup?.installed));
+  }, []);
+
+  // Structure results arrive as events; the model may also get set up while tracks are loaded.
+  useEffect(() => {
+    const done = listen<StructureOutcome>("structure", ({ payload }) => {
+      for (const slot of SLOTS) {
+        if (latest.current.tracks[slot]?.path !== payload.path) continue;
+        setStructures((s) => setAt(s, slot, payload.structure));
+        setStructurePending((p) => setAt(p, slot, false));
+        if (payload.error) console.warn(`structure: ${payload.error}`);
+      }
+    });
+    const setup = listen<StructureSetup>("structure-setup", ({ payload }) => {
+      const wasInstalled = latest.current.structureSetup?.installed;
+      setStructureSetup(payload);
+      if (payload.installed && !wasInstalled) {
+        latest.current.structureSetup = payload;
+        for (const slot of SLOTS) {
+          const track = latest.current.tracks[slot];
+          if (track) requestStructure(slot, track.path);
+        }
+      }
+    });
+    api.structureStatus().then(setStructureSetup);
+    return () => {
+      done.then((fn) => fn());
+      setup.then((fn) => fn());
+    };
+  }, [requestStructure]);
 
   // Poll the engine's playheads once per animation frame.
   useEffect(() => {
@@ -121,6 +168,8 @@ export default function App() {
     setReports((r) => setAt(r, slot, null));
     setSelectionReports((s) => setAt(s, slot, null));
     setSections((s) => setAt(s, slot, null));
+    setStructures((s) => setAt(s, slot, null));
+    setStructurePending((p) => setAt(p, slot, false));
   };
 
   const loadFile = useCallback(async (slot: Slot, path: string) => {
@@ -136,6 +185,7 @@ export default function App() {
       if (seq !== loadSeq.current[slot]) return;
       setTracks((t) => setAt(t, slot, info));
       resetSlot(slot);
+      requestStructure(slot, info.path);
       // First track loaded: make sure we're listening to something.
       const { tracks: current, transport: tr } = latest.current;
       if (!current[tr.active]) await api.setActive(slot);
@@ -397,12 +447,11 @@ export default function App() {
     }
   }, []);
 
-  /** In linked mode a selection applies to both tracks, so their loops stay in sync. */
-  const setRegion = useCallback((slot: Slot, region: Region | null) => {
-    const { linked: isLinked, tracks: current, regions: prev } = latest.current;
-    const targets = isLinked ? loadedSlots() : [slot];
+  /** Set (or clear) the selection and loop of each listed track. */
+  const applyRegions = useCallback((updates: [Slot, Region | null][]) => {
+    const { tracks: current, regions: prev } = latest.current;
     let next = prev;
-    for (const s of targets) {
+    for (const [s, region] of updates) {
       const duration = current[s]!.duration;
       const clamped =
         region && region.start < duration
@@ -414,8 +463,50 @@ export default function App() {
     }
     setRegions(next);
     // A fresh selection is what you want to read numbers for.
-    if (region) setScope("selection");
+    if (updates.some(([, r]) => r)) setScope("selection");
   }, []);
+
+  /** In linked mode a selection applies to both tracks, so their loops stay in sync. */
+  const setRegion = useCallback(
+    (slot: Slot, region: Region | null) => {
+      const targets = latest.current.linked ? loadedSlots() : [slot];
+      applyRegions(targets.map((s) => [s, region]));
+    },
+    [applyRegions],
+  );
+
+  /** The user corrected a track's parts: show it at once, then keep it. */
+  const editParts = useCallback((slot: Slot, segments: StructureSegment[]) => {
+    const track = latest.current.tracks[slot];
+    const current = latest.current.structures[slot];
+    if (!track || !current) return;
+    setStructures((s) => setAt(s, slot, { ...current, segments, edited: true }));
+    api.saveStructureEdit(track.path, segments).catch((e) => console.warn(`saving parts: ${e}`));
+  }, []);
+
+  const resetParts = useCallback(async (slot: Slot) => {
+    const track = latest.current.tracks[slot];
+    if (!track) return;
+    const detected = await api.resetStructureEdit(track.path).catch(() => null);
+    if (latest.current.tracks[slot]?.path === track.path && detected) setStructures((s) => setAt(s, slot, detected));
+  }, []);
+
+  /** A song part was clicked: select it, and the same part in the other track (2nd chorus ↔
+   *  2nd chorus) so every tab compares like with like. Without a match there, linked mode
+   *  falls back to the same times. */
+  const selectPart = useCallback(
+    (slot: Slot, part: Part) => {
+      const { tracks: current, structures: found, linked: isLinked } = latest.current;
+      const other = (1 - slot) as Slot;
+      const region = { start: part.start, end: part.end };
+      const counterpart = current[other] && found[other] ? matchingPart(part, found[other]!) : null;
+      const updates: [Slot, Region | null][] = [[slot, region]];
+      if (counterpart) updates.push([other, counterpart]);
+      else if (isLinked && current[other]) updates.push([other, region]);
+      applyRegions(updates);
+    },
+    [applyRegions],
+  );
 
   const clearRegions = useCallback(() => {
     for (const s of SLOTS) api.setLoop(s, null);
@@ -593,6 +684,11 @@ export default function App() {
               overlay={overlays[slot]}
               display={display}
               sections={tracks[slot] ? sections[slot] : null}
+              structure={tracks[slot] ? structures[slot] : null}
+              structurePending={structurePending[slot]}
+              onPart={(p) => selectPart(slot, p)}
+              onPartsEdit={(segments) => editParts(slot, segments)}
+              onPartsReset={() => resetParts(slot)}
               eqOn={slot === 0 && eqOn}
               trimDb={trims[slot]}
               active={transport.active === slot && !!tracks[slot]}
@@ -629,6 +725,11 @@ export default function App() {
           onScope={setScope}
           onLoad={loadFile}
           onRescan={() => api.rescanLibrary()}
+          fullReports={reports}
+          structures={structures}
+          structurePending={structurePending}
+          structureSetup={structureSetup}
+          onStructureInstall={() => api.structureInstall()}
         />
       </div>
 

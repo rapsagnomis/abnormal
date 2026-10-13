@@ -994,3 +994,86 @@ kbd {
   font-size: 11px;
   line-height: 18px;
 }
+
+/* ── Song structure ────────────────────────────────── */
+
+.structure-pending {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.panel-section .row .results-heading {
+  margin: 0;
+}
+.panel-section code {
+  font-size: 12px;
+}
+.panel-section a {
+  color: var(--a);
+}
+.part-boundary {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 9px;
+  margin-left: -4.5px;
+  cursor: col-resize;
+  z-index: 2;
+  touch-action: none;
+}
+.part-boundary::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+  transition: background 100ms;
+}
+.part-boundary:hover::after,
+.part-boundary.dragging::after {
+  background: var(--text);
+}
+.part-names {
+  position: absolute;
+  top: 19px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 280px;
+  padding: 6px;
+  border-radius: 8px;
+  background: #0e1013;
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.part-names button {
+  padding: 2px 8px;
+  font-size: 12px;
+  border-color: transparent;
+  background: color-mix(in srgb, var(--section-color, var(--section-other)) 45%, var(--panel));
+}
+.part-names button.on {
+  background: var(--section-color, var(--section-other));
+  color: #10161a;
+}
+.part-names button.reset {
+  flex-basis: 100%;
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+.part-names .label-0 { --section-color: var(--section-0); }
+.part-names .label-1 { --section-color: var(--section-1); }
+.part-names .label-2 { --section-color: var(--section-2); }
+.part-names .label-3 { --section-color: var(--section-3); }
+.part-names .label-4 { --section-color: var(--section-4); }
+.part-names .label-5 { --section-color: var(--section-5); }
+.part-names .label-6 { --section-color: var(--section-6); }
+.part-names .label-7 { --section-color: var(--section-7); }
+.part-names .label-other { --section-color: var(--section-other); }

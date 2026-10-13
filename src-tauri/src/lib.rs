@@ -13,6 +13,7 @@ mod spectrogram;
 mod spectrum;
 mod stereo;
 mod stft;
+mod structure;
 #[cfg(test)]
 mod tests;
 
@@ -289,6 +290,57 @@ fn search_library(query: String, limit: usize, library: State<'_, Arc<Library>>)
     library.search(&query, limit)
 }
 
+/// Whether the song-structure model is set up, and install progress.
+#[tauri::command]
+fn structure_status(engine: State<'_, Arc<structure::Engine>>) -> structure::SetupStatus {
+    engine.status()
+}
+
+/// Set up the song-structure model's Python environment in the background, emitting
+/// `structure-setup` as it goes.
+#[tauri::command]
+fn structure_install(app: tauri::AppHandle, engine: State<'_, Arc<structure::Engine>>) {
+    let engine = engine.inner().clone();
+    std::thread::spawn(move || {
+        engine.install(&|status| {
+            let _ = app.emit("structure-setup", status);
+        })
+    });
+}
+
+/// The structure of a file if it's been analysed; otherwise `None`, and it is queued for
+/// analysis (when the model is set up), with the result sent as a `structure` event.
+#[tauri::command]
+fn song_structure(path: String, app: tauri::AppHandle, engine: State<'_, Arc<structure::Engine>>) -> Option<structure::Structure> {
+    let path = PathBuf::from(path);
+    if let Some(found) = engine.cached(&path) {
+        return Some(found);
+    }
+    engine.request(
+        path,
+        Arc::new(move |outcome| {
+            let _ = app.emit("structure", outcome);
+        }),
+    );
+    None
+}
+
+/// Keep the user's corrected song parts for a file (they win over the detected ones).
+#[tauri::command]
+fn save_structure_edit(
+    path: String,
+    segments: Vec<structure::Segment>,
+    engine: State<'_, Arc<structure::Engine>>,
+) -> Result<structure::Structure, String> {
+    engine.save_edit(&PathBuf::from(path), segments)
+}
+
+/// Forget the user's corrections for a file, returning the detected structure.
+#[tauri::command]
+fn reset_structure_edit(path: String, engine: State<'_, Arc<structure::Engine>>) -> Option<structure::Structure> {
+    engine.reset_edit(&PathBuf::from(path))
+}
+
 /// Deezer search and downloads through a headless Deemix server (see `deemix.rs`).
 struct Downloads {
     deemix: Deemix,
@@ -465,6 +517,7 @@ pub fn run() {
             let library = Arc::new(Library::new(root.clone(), db_path));
             let deemix = Deemix::new(&app.path().home_dir()?, app.path().app_data_dir()?.join("deemix"), root);
             app.manage(Arc::new(Downloads { deemix, watching: AtomicBool::new(false) }));
+            app.manage(Arc::new(structure::Engine::new(app.path().home_dir()?, app.path().app_data_dir()?.join("allin1"))));
             app.manage(library.clone());
             // Pick up tracks added since the last run.
             let handle = app.handle().clone();
@@ -498,6 +551,11 @@ pub fn run() {
             deezer_search,
             deezer_download,
             deezer_queue,
+            structure_status,
+            structure_install,
+            song_structure,
+            save_structure_edit,
+            reset_structure_edit,
             transport,
         ])
         .build(tauri::generate_context!())

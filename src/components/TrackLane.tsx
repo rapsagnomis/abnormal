@@ -115,8 +115,21 @@ export function TrackLane(props: Props) {
             onRegion={props.onRegion}
           />
         ) : (
-          <button className="drop-zone" onClick={props.onOpen} disabled={loading}>
-            {loading ? "Decoding…" : "Drop an mp3, flac or wav file here, or click to browse"}
+          <button
+            className="drop-zone"
+            onClick={props.onOpen}
+            disabled={loading}
+            title="Drop an mp3, flac or wav file here, or click to browse"
+            aria-label="Drop an mp3, flac or wav file here, or click to browse"
+          >
+            {loading ? (
+              "Decoding…"
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5" />
+                <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+              </svg>
+            )}
           </button>
         )}
         {loading && track && <div className="lane-overlay">Decoding…</div>}

@@ -436,7 +436,7 @@ function drawSpectrogram(
     const x0 = xAt(img.start);
     ctx.drawImage(img.image, x0, 0, xAt(img.end) - x0, h);
   }
-  ctx.font = `${10 * dpr}px -apple-system, sans-serif`;
+  ctx.font = `${11 * dpr}px ui-rounded, -apple-system, sans-serif`;
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   for (const f of SPEC_LABELS) {
@@ -444,7 +444,7 @@ function drawSpectrogram(
     ctx.fillStyle = color("--curve-grid");
     ctx.fillRect(0, y, w, dpr);
     ctx.fillStyle = color("--curve-label");
-    ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}`, 4 * dpr, y - 6 * dpr);
+    ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}`, 4 * dpr, y - 7 * dpr);
   }
 }
 
@@ -468,7 +468,7 @@ function drawOverlay(
   const yAt = (v: number) => ((top - Math.min(hi, Math.max(lo, v))) / (top - bottom)) * h;
   const xEnd = Math.min(w, xAt(duration));
 
-  ctx.font = `${10 * dpr}px -apple-system, sans-serif`;
+  ctx.font = `${11 * dpr}px ui-rounded, -apple-system, sans-serif`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   for (const g of overlay.grid) {
@@ -476,7 +476,7 @@ function drawOverlay(
     ctx.fillStyle = color("--curve-grid");
     ctx.fillRect(0, y, xEnd, dpr);
     ctx.fillStyle = color("--curve-label");
-    ctx.fillText(`${g}`, w - 4 * dpr, y - 6 * dpr);
+    ctx.fillText(`${g}`, w - 4 * dpr, y - 7 * dpr);
   }
 
   if (overlay.reference !== null) {

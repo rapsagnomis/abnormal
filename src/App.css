@@ -1,4 +1,18 @@
+/* Garabosse (CUTE licence, see assets/fonts/garabosse), Perle cut: the app title only. */
+@font-face {
+  font-family: "Garabosse Perle";
+  src: url("./assets/fonts/garabosse/Garabosse-Perle.woff2") format("woff2");
+  font-display: block;
+  /* The font's own metrics (850/350) centre the line box 0.15em below the capitals' centre
+     (cap height 800), so the title sat high in the header. 1000/200 centres it on the capitals. */
+  ascent-override: 100%;
+  descent-override: 20%;
+}
+
 :root {
+  --font-display: "Garabosse Perle", Georgia, serif;
+  --font-text: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, sans-serif;
+
   --bg: #121417;
   --panel: #1a1d22;
   --panel-raised: #22262d;
@@ -27,8 +41,8 @@
   --section-7: #e66767;
   --section-other: #5b616b;
 
-  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
-  font-size: 13px;
+  font-family: var(--font-text);
+  font-size: 14px;
   color: var(--text);
   background: var(--bg);
   color-scheme: dark;
@@ -86,13 +100,14 @@ button:focus-visible {
 }
 .app-header h1 {
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 400;
+  line-height: 1;
 }
 .audio-status {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 13px;
 }
 .audio-status.error {
   color: var(--danger);
@@ -164,11 +179,11 @@ button:focus-visible {
 .track-meta,
 .region-time {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 13px;
 }
 .lane-time {
   font-variant-numeric: tabular-nums;
-  font-size: 12px;
+  font-size: 13px;
   white-space: nowrap;
 }
 .lane-actions {
@@ -188,6 +203,19 @@ button:focus-visible {
   border: 1.5px dashed var(--border);
   background: transparent;
   color: var(--text-dim);
+  display: grid;
+  place-items: center;
+}
+.drop-zone svg {
+  width: 40px;
+  height: 40px;
+  opacity: 0.7;
+  transition: transform 120ms, opacity 120ms;
+}
+.drop-zone:hover:not(:disabled) svg,
+.lane.drop-target .drop-zone svg {
+  opacity: 1;
+  transform: translateY(-2px);
 }
 .lane.drop-target .drop-zone {
   border-color: var(--accent);
@@ -268,7 +296,7 @@ button:focus-visible {
 
 .ruler {
   position: relative;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -298,7 +326,7 @@ button:focus-visible {
 }
 .transport .play {
   width: 44px;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .ab-switch {
@@ -312,7 +340,7 @@ button:focus-visible {
   border: none;
   border-radius: 0;
   font-weight: 700;
-  font-size: 15px;
+  font-size: 16px;
   background: var(--panel-raised);
 }
 .ab-switch .slot-a {
@@ -337,7 +365,7 @@ button:focus-visible {
 .hints {
   margin: 0;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 12px;
   text-align: center;
 }
 
@@ -358,7 +386,7 @@ button:focus-visible {
 }
 
 .trim-badge {
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   padding: 2px 6px;
   border-radius: 4px;
@@ -386,7 +414,7 @@ button:focus-visible {
 }
 .panel-header h2 {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -400,7 +428,7 @@ button:focus-visible {
   border: none;
   border-radius: 0;
   padding: 3px 9px;
-  font-size: 12px;
+  font-size: 13px;
   background: var(--panel-raised);
 }
 .segmented button + button {
@@ -430,7 +458,7 @@ button:focus-visible {
 }
 .metrics thead th {
   font-weight: 700;
-  font-size: 12px;
+  font-size: 13px;
   border-bottom: 1px solid var(--border);
 }
 .metrics tbody tr + tr {
@@ -453,7 +481,7 @@ button:focus-visible {
 }
 .unit {
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .panel-section {
@@ -471,13 +499,13 @@ button:focus-visible {
 }
 .trims {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
 kbd {
   font: inherit;
-  font-size: 10px;
+  font-size: 11px;
   padding: 0 4px;
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -488,7 +516,7 @@ kbd {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) 400px;
   gap: 10px;
   min-height: 0;
 }
@@ -515,7 +543,7 @@ kbd {
 
 .metrics .section-heading th {
   padding-top: 10px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -533,7 +561,7 @@ kbd {
   margin-bottom: 4px;
 }
 .chart-title {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 .chart-empty {
@@ -541,12 +569,12 @@ kbd {
   display: grid;
   place-items: center;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 13px;
 }
 .legend {
   display: flex;
   gap: 8px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 .legend-item {
@@ -575,7 +603,7 @@ kbd {
 }
 .chart .tick {
   fill: var(--text-dim);
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 .chart .hover-band {
@@ -590,7 +618,7 @@ kbd {
   border-radius: 6px;
   background: #0e1013;
   border: 1px solid var(--border);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
   z-index: 2;
@@ -610,7 +638,7 @@ kbd {
 
 .control-label {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .chart .zero {
@@ -623,7 +651,7 @@ kbd {
 }
 .chart-note {
   margin: -6px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 
@@ -651,7 +679,7 @@ kbd {
 .gonio-axis {
   position: absolute;
   top: 3px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim);
 }
 .gonio-axis.l {
@@ -668,7 +696,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 .gonio figcaption i {
@@ -679,7 +707,7 @@ kbd {
 }
 .scope-label {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 13px;
 }
 .panel > .tabs {
   border-bottom: 1px solid var(--border);
@@ -696,7 +724,7 @@ kbd {
   display: flex;
   gap: 12px;
   margin: -4px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -717,7 +745,7 @@ kbd {
   margin: -4px 0 0;
   padding: 0;
   list-style: none;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-dim);
   display: flex;
   flex-direction: column;
@@ -740,12 +768,12 @@ kbd {
   align-items: center;
   justify-content: space-between;
   gap: 6px 8px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-dim);
 }
 .library-line button {
   padding: 2px 8px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .library-error {
   color: var(--danger);
@@ -777,7 +805,7 @@ kbd {
   border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 .match-score {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -789,7 +817,7 @@ kbd {
   white-space: nowrap;
 }
 .match-album {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 .match-detail {
@@ -797,7 +825,7 @@ kbd {
   flex-wrap: wrap;
   gap: 2px 8px;
   margin-top: 2px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -807,7 +835,7 @@ kbd {
 }
 .match-load button {
   padding: 1px 7px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 .match-load button.on {
@@ -848,7 +876,7 @@ kbd {
   box-shadow: inset -2px 0 0 var(--panel);
   background: color-mix(in srgb, var(--section-color) 55%, var(--panel));
   color: var(--text);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 16px;
   text-align: left;
@@ -898,6 +926,6 @@ kbd {
 
 .eq-table button.listen {
   padding: 0 6px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 18px;
 }

@@ -1,0 +1,55 @@
+# Sonic Compare — Plan
+
+Desktop tool to analyse and compare the sonic characteristics of a song against a reference track.
+
+## Decisions
+- **Platform:** native desktop, Tauri v2 (Rust core + React/TypeScript UI)
+- **Comparison:** 1:1 (track A vs reference track B), full song or selected regions
+- **Stereo analysis:** yes
+- **Tonal suggestions:** concrete EQ moves (type, freq, gain, Q)
+- **Formats:** mp3, flac, wav
+
+## Architecture
+
+```
+┌─────────── React UI (TypeScript) ───────────┐
+│ drop zone · 2× canvas waveform (Rust peaks) │
+│ transport · regions · uPlot charts · A/B    │
+└──────────────┬──────────────────────────────┘
+               │ Tauri commands + events (playhead, progress)
+┌──────────────▼──────────────────────────────┐
+│ Rust core                                   │
+│  decode   : symphonia → f32 planar buffers  │
+│  playback : cpal stream, A/B crossfade,     │
+│             loudness-match gain, seek, loop │
+│  analysis : rayon workers per track/region  │
+│    loudness ─ ebur128 (I, S, M, LRA, dBTP)  │
+│    dynamics ─ crest, PSR, TT-DR, histogram  │
+│    tonal    ─ realfft LTAS, 1/6-oct smooth  │
+│    stereo   ─ correlation, M/S, width/band  │
+│  suggest  : diff curve → EQ moves           │
+└─────────────────────────────────────────────┘
+```
+
+- Audio is decoded once and stays in Rust; the UI only receives downsampled peaks and analysis results.
+- All analysis takes a `(track, start, end)` range — whole song = `0..len`, so region comparison is the same code path.
+- Playback is a single cpal stream: A/B switch is a short crossfade, loudness-match is a gain derived from the integrated LUFS difference, optional playhead lock between tracks.
+
+## Metrics
+
+| Area | Measures |
+|---|---|
+| Loudness | Integrated LUFS, short-term/momentary curves, LRA, sample peak, true peak (dBTP), PLR |
+| Micro dynamics | Crest factor and PSR over time, peak-vs-RMS histogram, transient strength |
+| Macro dynamics | LRA, short-term loudness distribution, TT-DR score, section contrast |
+| Tonal | Loudness-normalized LTAS (1/6 oct), band energies (sub → air), spectral tilt, centroid, A−B diff curve |
+| Stereo | Correlation over time, M/S ratio, width per band, goniometer for selected region |
+
+**EQ suggestions:** smooth diff curve → find contiguous deviations above ~1 dB → fit to shelf/peak (f, gain, Q) → rank by perceptual weight.
+
+## Phases
+1. **Skeleton** ✅ — Tauri + Vite + React scaffold, drag & drop 1–2 files, symphonia decode, waveform peaks → custom canvas waveform (wavesurfer dropped: it is built around an HTML media element, but playback is native), cpal transport (play/seek/loop region), A/B switch.
+2. **Loudness** ✅ — ebur128 integration (mono measured as dual mono), M/S curve overlay, loudness-matched A/B (attenuate the louder track, never boost), full-track vs selection stats, validated against EBU Tech 3341/3342 signals and cross-checked with ffmpeg. Also: waveform zoom/pan with on-demand detail peaks.
+3. **Dynamics** ✅ — crest factor (whole + 50 ms median), PSR (median/min + gated curve overlay), onset rate and attack rise, TT DR (matches ffmpeg drmeter within 0.05), short-term P10/P50/P95, short-term loudness and crest distributions (A/B overlaid histograms). Curve + Match controls moved to the transport bar.
+4. **Tonal + stereo** ✅ — loudness-normalised LTAS (energy per 1/6 oct, pink = flat), A−B difference, centroid, tilt, 7 band levels; correlation (mean, worst 5%, % out of phase, curve overlay), side/mid, L/R balance, width per band and per frequency, goniometers. Waveform simplified to a single min/max layer; Link off by default.
+5. **Region compare + suggestions** ✅ — every tab measures full tracks or selections (a lane without a selection falls back to its full track; load the same file twice to compare two parts of one song); "EQ match" tab fits up to 6 bell/shelf moves for A towards B (1/3-oct smoothed, median level offset removed, Q ≤ 2, ±6 dB, ≥ ½ oct apart) with needed-vs-suggested chart and copy; report export as Markdown or JSON summary.

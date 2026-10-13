@@ -1,0 +1,115 @@
+import type { Region, Slot, TrackInfo } from "../lib/api";
+import { SLOT_LABELS } from "../lib/api";
+import { formatChannels, formatRate, formatTime } from "../lib/format";
+import type { Overlay } from "../lib/overlay";
+import type { View } from "../lib/view";
+import { Waveform } from "./Waveform";
+
+interface Props {
+  slot: Slot;
+  track: TrackInfo | null;
+  loading: boolean;
+  error: string | null;
+  position: number;
+  region: Region | null;
+  view: View | null;
+  overlay: Overlay | null;
+  /** Playback trim applied by loudness matching, dB (0 when off). */
+  trimDb: number;
+  active: boolean;
+  dropTarget: boolean;
+  onActivate: () => void;
+  onOpen: () => void;
+  onClear: () => void;
+  onSeek: (seconds: number) => void;
+  onRegion: (region: Region | null) => void;
+  onView: (view: View) => void;
+}
+
+export function TrackLane(props: Props) {
+  const { slot, track, loading, error, position, region, active, dropTarget, trimDb } = props;
+  const label = SLOT_LABELS[slot];
+
+  return (
+    <section
+      className={`lane slot-${label.toLowerCase()}${active ? " active" : ""}${dropTarget ? " drop-target" : ""}`}
+      data-slot={slot}
+    >
+      <header className="lane-header">
+        <button
+          className="slot-badge"
+          onClick={props.onActivate}
+          disabled={!track}
+          title={`Listen to ${label} (${slot + 1})`}
+        >
+          {label}
+        </button>
+        <div className="lane-title">
+          {track ? (
+            <>
+              <span className="track-name" title={track.path}>
+                {track.name}
+              </span>
+              <span className="track-meta">
+                {formatRate(track.sampleRate)} · {formatChannels(track.channels)} ·{" "}
+                {formatTime(track.duration)}
+              </span>
+            </>
+          ) : (
+            <span className="track-meta">{slot === 0 ? "Your track" : "Reference track"}</span>
+          )}
+        </div>
+        {track && Math.abs(trimDb) >= 0.05 && (
+          <span className="trim-badge" title="Loudness-match trim applied to playback">
+            {trimDb > 0 ? "+" : ""}
+            {trimDb.toFixed(1)} dB
+          </span>
+        )}
+        {track && (
+          <span className="lane-time">
+            {formatTime(position)}
+            {region && (
+              <span className="region-time">
+                {" "}
+                · sel {formatTime(region.start)}–{formatTime(region.end)}
+              </span>
+            )}
+          </span>
+        )}
+        <div className="lane-actions">
+          <button onClick={props.onOpen} disabled={loading}>
+            Open…
+          </button>
+          {track && (
+            <button onClick={props.onClear} disabled={loading} title="Remove track">
+              ✕
+            </button>
+          )}
+        </div>
+      </header>
+
+      <div className="lane-body">
+        {track ? (
+          <Waveform
+            slot={slot}
+            peaks={track.peaks}
+            duration={track.duration}
+            position={position}
+            region={region}
+            view={props.view ?? { start: 0, end: track.duration }}
+            overlay={props.overlay}
+            onView={props.onView}
+            onSeek={props.onSeek}
+            onRegion={props.onRegion}
+          />
+        ) : (
+          <button className="drop-zone" onClick={props.onOpen} disabled={loading}>
+            {loading ? "Decoding…" : "Drop an mp3, flac or wav file here, or click to browse"}
+          </button>
+        )}
+        {loading && track && <div className="lane-overlay">Decoding…</div>}
+        {error && <div className="lane-error">{error}</div>}
+      </div>
+    </section>
+  );
+}

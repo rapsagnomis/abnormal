@@ -1,5 +1,5 @@
 import type { AnalysisReport, EqFilter, EqReport, LibraryStatus, Region, Slot, SongStructure, StructureSetup } from "../lib/api";
-import { curveOf, describe, eqAsText, formatGain, formatHz, KIND_LABEL } from "../lib/eq";
+import { curveOf, describe, formatGain, formatHz, KIND_LABEL } from "../lib/eq";
 import { formatTime } from "../lib/format";
 import { fmt, SECTIONS, showValue } from "../lib/metrics";
 import type { Section, Tab } from "../lib/metrics";
@@ -8,6 +8,7 @@ import { Goniometer } from "./Goniometer";
 import { HistogramChart } from "./HistogramChart";
 import { LibraryView } from "./LibraryView";
 import { PartsTable } from "./PartsTable";
+import { ProQExport } from "./ProQExport";
 
 export type Scope = "full" | "selection";
 export type { Tab };
@@ -185,6 +186,7 @@ export function AnalysisPanel(p: Props) {
               onAudition={p.onEqAudition}
               passages={p.eqPassages}
               onListen={p.onListen}
+              names={p.paths.map((path) => path?.split("/").pop() ?? null) as [string | null, string | null]}
             />
           </section>
         </>
@@ -278,9 +280,11 @@ interface EqViewProps {
   onAudition: (on: boolean) => void;
   passages: (Region | null)[];
   onListen: (region: Region) => void;
+  /** File names of A and B, for the exported preset's name. */
+  names: [string | null, string | null];
 }
 
-function EqView({ eq, freqs, hasBoth, active, audition, compensation, onActive, onAudition, passages, onListen }: EqViewProps) {
+function EqView({ eq, freqs, hasBoth, active, audition, compensation, onActive, onAudition, passages, onListen, names }: EqViewProps) {
   if (!hasBoth) {
     return <p className="chart-note">Load a track in A and a reference in B to get EQ suggestions.</p>;
   }
@@ -362,12 +366,8 @@ function EqView({ eq, freqs, hasBoth, active, audition, compensation, onActive, 
         <span className="chart-note">
           Fit: {eq.errorBefore.toFixed(1)} → {eq.errorAfter.toFixed(1)} dB RMS left
         </span>
-        {eq.suggestions.length > 0 && (
-          <button onClick={() => navigator.clipboard.writeText(eqAsText(chosen))} disabled={chosen.length === 0}>
-            Copy
-          </button>
-        )}
       </div>
+      {eq.suggestions.length > 0 && <ProQExport filters={chosen} names={names} />}
       {eq.suggestions.length > 0 && (
         <div className="eq-audition">
           <button

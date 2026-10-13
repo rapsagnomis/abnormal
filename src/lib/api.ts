@@ -331,6 +331,10 @@ export const api = {
     invoke<BandActivity>("band_activity", { slot, range: region ? [region.start, region.end] : null }),
   suggestEq: (track: number[], reference: number[]) => invoke<EqReport>("suggest_eq", { track, reference }),
   writeTextFile: (path: string, contents: string) => invoke<void>("write_text_file", { path, contents }),
+  /** The user's Pro-Q 4 "Default Setting" preset text, if any. */
+  proQTemplate: () => invoke<string | null>("pro_q_template"),
+  /** Save a Pro-Q 4 preset into its preset folder; returns the file's path. */
+  saveProQPreset: (name: string, contents: string) => invoke<string>("save_pro_q_preset", { name, contents }),
   libraryStatus: () => invoke<LibraryStatus>("library_status"),
   rescanLibrary: () => invoke<void>("rescan_library"),
   similarTracks: (features: Features, exclude: string[], weights: MatchWeights, limit: number) =>

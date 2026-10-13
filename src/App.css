@@ -1077,3 +1077,13 @@ kbd {
 .part-names .label-6 { --section-color: var(--section-6); }
 .part-names .label-7 { --section-color: var(--section-7); }
 .part-names .label-other { --section-color: var(--section-other); }
+
+.proq-export {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.proq-export .chart-note {
+  margin: 0;
+}

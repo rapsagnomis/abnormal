@@ -248,6 +248,37 @@ fn set_eq(slot: usize, filters: Vec<eq::Filter>, enabled: bool, state: State<'_,
     Ok(())
 }
 
+/// Pro-Q 4's user preset folder, relative to the home directory.
+const PRO_Q_PRESETS: &str = "Documents/FabFilter/Presets/Pro-Q 4";
+/// Subfolder of it that EQ-match presets are saved to (it shows up in Pro-Q's preset browser).
+const PRO_Q_FOLDER: &str = "abnormal";
+
+/// The user's Pro-Q 4 "Default Setting" preset, used as the template for EQ-match presets so
+/// they carry the user's own analyser and display settings. `None` if Pro-Q 4 has none.
+#[tauri::command]
+fn pro_q_template(app: tauri::AppHandle) -> Option<String> {
+    let path = app.path().home_dir().ok()?.join(PRO_Q_PRESETS).join("Default Setting.ffp");
+    let text = std::fs::read_to_string(path).ok()?;
+    // Old presets carried over from Pro-Q 3 can be binary; only the text format is a template.
+    text.contains("[Parameters]").then_some(text)
+}
+
+/// Save a Pro-Q 4 preset into Pro-Q's preset folder, returning where it went.
+#[tauri::command]
+fn save_pro_q_preset(name: String, contents: String, app: tauri::AppHandle) -> Result<String, String> {
+    let root = app.path().home_dir().map_err(|e| e.to_string())?.join(PRO_Q_PRESETS);
+    if !root.is_dir() {
+        return Err("Pro-Q 4's preset folder was not found: is Pro-Q 4 installed?".into());
+    }
+    let dir = root.join(PRO_Q_FOLDER);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    // File names can't hold path separators (or a leading dot, which would hide the preset).
+    let clean: String = name.chars().map(|c| if matches!(c, '/' | ':' | '\\') { '-' } else { c }).collect();
+    let path = dir.join(format!("{}.ffp", clean.trim().trim_start_matches('.')));
+    std::fs::write(&path, contents).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// Write a report to a path the user picked in the save dialog.
 #[tauri::command]
 async fn write_text_file(path: String, contents: String) -> Result<(), String> {
@@ -542,6 +573,8 @@ pub fn run() {
             sections,
             band_activity,
             write_text_file,
+            pro_q_template,
+            save_pro_q_preset,
             library_status,
             rescan_library,
             similar_tracks,

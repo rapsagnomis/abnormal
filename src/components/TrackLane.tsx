@@ -1,3 +1,4 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Region, Section, Slot, SongStructure, StructureSegment, TrackInfo } from "../lib/api";
 import type { Part } from "../lib/structure";
 import { SLOT_LABELS } from "../lib/api";
@@ -56,13 +57,23 @@ export function TrackLane(props: Props) {
         >
           {label}
         </button>
+        {track &&
+          (track.cover ? (
+            <img className="lane-cover" src={convertFileSrc(track.cover)} alt="" />
+          ) : (
+            <span className="lane-cover" aria-hidden="true">
+              ♪
+            </span>
+          ))}
         <div className="lane-title">
           {track ? (
             <>
               <span className="track-name" title={track.path}>
-                {track.name}
+                {/* Tags when the file has them, else its name. */}
+                {track.title ? (track.artist ? `${track.title} – ${track.artist}` : track.title) : track.name.replace(/\.[^.]+$/, "")}
               </span>
               <span className="track-meta">
+                {track.album && <span className="track-album">{track.album} · </span>}
                 {formatRate(track.sampleRate)} · {formatChannels(track.channels)} ·{" "}
                 {formatTime(track.duration)}
                 {props.structure?.bpm != null && ` · ${Math.round(props.structure.bpm)} BPM`}

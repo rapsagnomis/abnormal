@@ -18,6 +18,12 @@ export interface TrackInfo {
   channels: number;
   duration: number;
   peaks: Peaks;
+  /** From the file's tags, when it has them. */
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  /** Absolute path of the album art thumbnail. */
+  cover: string | null;
 }
 
 export interface Transport {

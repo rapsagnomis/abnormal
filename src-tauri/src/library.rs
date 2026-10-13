@@ -102,6 +102,17 @@ pub struct LibraryTrack {
     pub copies: Vec<String>,
 }
 
+/// Tags of a loaded track, for display.
+#[derive(Serialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackMeta {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// Absolute path of the album art thumbnail.
+    pub cover: Option<String>,
+}
+
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Match {
@@ -232,6 +243,26 @@ impl Library {
             }
             self.save_every(last_save);
         });
+    }
+
+    /// Title, artist, album and cover thumbnail (absolute path) of any audio file: from the
+    /// index when it's in the library and unchanged, else read from the file now.
+    pub fn track_meta(&self, path: &Path) -> TrackMeta {
+        let indexed = {
+            let db = self.db.lock().unwrap();
+            let current = std::fs::metadata(path).ok().map(|m| {
+                let modified = m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+                (m.len(), modified)
+            });
+            db.tracks.get(&key(path)).filter(|e| Some((e.size, e.modified)) == current).and_then(|e| e.meta.clone())
+        };
+        let meta = indexed.unwrap_or_else(|| self.read_meta(path));
+        TrackMeta {
+            title: meta.title,
+            artist: meta.artist,
+            album: meta.album,
+            cover: meta.cover.map(|name| self.covers_dir.join(name).to_string_lossy().into_owned()),
+        }
     }
 
     fn read_meta(&self, path: &Path) -> Meta {

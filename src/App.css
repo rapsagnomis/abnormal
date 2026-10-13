@@ -1087,3 +1087,25 @@ kbd {
 .proq-export .chart-note {
   margin: 0;
 }
+
+.lane-cover {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--panel-raised);
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  font-size: 15px;
+}
+.track-album {
+  color: var(--text);
+  opacity: 0.75;
+}
+.lane-title .track-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

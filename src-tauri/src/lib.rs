@@ -61,6 +61,9 @@ struct TrackInfo {
     channels: usize,
     duration: f64,
     peaks: Peaks,
+    /// Title, artist, album, cover from the file's tags.
+    #[serde(flatten)]
+    meta: library::TrackMeta,
 }
 
 #[derive(Serialize)]
@@ -88,9 +91,11 @@ async fn load_track(
     slot: usize,
     path: String,
     state: State<'_, AppState>,
+    library: State<'_, Arc<Library>>,
 ) -> Result<TrackInfo, String> {
     check_slot(slot)?;
     let player = state.player.clone();
+    let library = library.inner().clone();
     let tracks = state.tracks.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -112,6 +117,7 @@ async fn load_track(
             channels: audio.channels.len(),
             duration: audio.duration(),
             peaks: peaks::compute_peaks(&audio, PEAK_BUCKETS),
+            meta: library.track_meta(&path_buf),
         };
         tracks.lock().unwrap()[slot] = Some(Arc::new(audio));
         Ok(info)

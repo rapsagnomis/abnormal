@@ -24,6 +24,7 @@ cpal = "0.18"
 rubato = "5"
 ebur128 = "0.1.10"
 realfft = "3.5.0"
+ureq = { version = "2", features = ["json", "cookies"] }
 
 # Decoding/DSP is painfully slow without optimisation, even in dev builds.
 [profile.dev]

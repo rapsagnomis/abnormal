@@ -719,3 +719,24 @@ fn sections_real_file() {
     crate::spectrogram::compute(&audio, 0, audio.frames(), 1600, 200);
     println!("spectrogram 1600×200: {:.2?}", t.elapsed());
 }
+
+/// Starts Deemix headless in a temporary data folder, connects and searches Deezer (no login,
+/// no download): `SONIC_DEEMIX_SEARCH="artist title" cargo test deemix_search -- --nocapture`.
+#[test]
+fn deemix_search() {
+    let Some(query) = std::env::var_os("SONIC_DEEMIX_SEARCH") else { return };
+    let dir = std::env::temp_dir().join("abnormal-deemix-test");
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let deemix = crate::deemix::Deemix::new(&home, dir.join("data"), dir.join("music"));
+    let status = deemix.connect().unwrap();
+    println!("{status:?}");
+    assert!(status.installed);
+    let tracks = deemix.search(&query.to_string_lossy(), 5).unwrap();
+    for t in &tracks {
+        println!("{:>10} {} - {} ({}, album {}) {:.0} s", t.id, t.artist, t.title, t.album, t.album_id, t.duration);
+    }
+    assert!(!tracks.is_empty());
+    assert!(deemix.queue().unwrap().is_empty());
+    deemix.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}

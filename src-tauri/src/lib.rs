@@ -1,5 +1,6 @@
 mod activity;
 mod decode;
+mod deemix;
 mod dynamics;
 mod eq;
 mod library;
@@ -15,13 +16,17 @@ mod stft;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
 use decode::AudioData;
+use deemix::{Deemix, DeezerTrack, QueueItem};
 use dynamics::DynamicsReport;
 use loudness::LoudnessReport;
 use spectrum::SpectrumReport;
@@ -284,6 +289,109 @@ fn search_library(query: String, limit: usize, library: State<'_, Arc<Library>>)
     library.search(&query, limit)
 }
 
+/// Deezer search and downloads through a headless Deemix server (see `deemix.rs`).
+struct Downloads {
+    deemix: Deemix,
+    /// A thread is following the download queue.
+    watching: AtomicBool,
+}
+
+/// Run a Deemix call (blocking HTTP, maybe a server start) off the async runtime.
+async fn with_deemix<T: Send + 'static>(
+    downloads: &Arc<Downloads>,
+    f: impl FnOnce(&Deemix) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let downloads = downloads.clone();
+    tauri::async_runtime::spawn_blocking(move || f(&downloads.deemix))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Start Deemix if needed and log in with the saved ARL, if any.
+#[tauri::command]
+async fn deezer_connect(downloads: State<'_, Arc<Downloads>>) -> Result<deemix::Status, String> {
+    with_deemix(&downloads, |d| d.connect()).await
+}
+
+#[tauri::command]
+async fn deezer_login(arl: String, downloads: State<'_, Arc<Downloads>>) -> Result<deemix::Status, String> {
+    with_deemix(&downloads, move |d| d.login(&arl)).await
+}
+
+#[tauri::command]
+async fn deezer_search(query: String, limit: usize, downloads: State<'_, Arc<Downloads>>) -> Result<Vec<DeezerTrack>, String> {
+    with_deemix(&downloads, move |d| d.search(&query, limit)).await
+}
+
+/// Queue a Deezer track or album for download into the library, then follow the queue.
+#[tauri::command]
+async fn deezer_download(
+    kind: String,
+    id: u64,
+    app: tauri::AppHandle,
+    downloads: State<'_, Arc<Downloads>>,
+    library: State<'_, Arc<Library>>,
+) -> Result<(), String> {
+    // What had finished before, so the watcher notices this one finishing, even at once.
+    let before = with_deemix(&downloads, move |d| {
+        let before = finished_uuids(&d.queue()?);
+        d.download(&kind, id)?;
+        Ok(before)
+    })
+    .await?;
+    watch_downloads(downloads.inner().clone(), library.inner().clone(), app, before);
+    Ok(())
+}
+
+#[tauri::command]
+async fn deezer_queue(downloads: State<'_, Arc<Downloads>>) -> Result<Vec<QueueItem>, String> {
+    with_deemix(&downloads, |d| d.queue()).await
+}
+
+fn finished_uuids(items: &[QueueItem]) -> HashSet<String> {
+    items.iter().filter(|i| i.finished()).map(|i| i.uuid.clone()).collect()
+}
+
+/// Poll the download queue while anything is pending, emitting `deezer-queue`, and rescan the
+/// library whenever a download finishes so the new files get analysed.
+fn watch_downloads(downloads: Arc<Downloads>, library: Arc<Library>, app: tauri::AppHandle, before: HashSet<String>) {
+    if downloads.watching.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let mut finished = before;
+        loop {
+            let Ok(items) = downloads.deemix.queue() else { break };
+            let _ = app.emit("deezer-queue", &items);
+            let now = finished_uuids(&items);
+            if now.difference(&finished).next().is_some() {
+                rescan_when_idle(library.clone(), app.clone());
+            }
+            finished = now;
+            if items.iter().all(QueueItem::finished) {
+                downloads.watching.store(false, Ordering::SeqCst);
+                // Something queued between the poll and the flag going down would go unwatched.
+                let late = downloads.deemix.queue().is_ok_and(|q| !q.iter().all(QueueItem::finished));
+                if !late || downloads.watching.swap(true, Ordering::SeqCst) {
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
+}
+
+/// Index the library once any running scan is over (a scan already underway may have listed
+/// the folder before the new files landed).
+fn rescan_when_idle(library: Arc<Library>, app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        while library.status().scanning {
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        index_library(&library, &app);
+    });
+}
+
 #[tauri::command]
 fn set_trims(db: [f64; SLOTS], state: State<'_, AppState>) {
     for (slot, d) in db.into_iter().enumerate() {
@@ -354,7 +462,9 @@ pub fn run() {
         .setup(|app| {
             let root = app.path().home_dir()?.join(LIBRARY_DIR);
             let db_path = app.path().app_data_dir()?.join("library.json");
-            let library = Arc::new(Library::new(root, db_path));
+            let library = Arc::new(Library::new(root.clone(), db_path));
+            let deemix = Deemix::new(&app.path().home_dir()?, app.path().app_data_dir()?.join("deemix"), root);
+            app.manage(Arc::new(Downloads { deemix, watching: AtomicBool::new(false) }));
             app.manage(library.clone());
             // Pick up tracks added since the last run.
             let handle = app.handle().clone();
@@ -383,8 +493,21 @@ pub fn run() {
             rescan_library,
             similar_tracks,
             search_library,
+            deezer_connect,
+            deezer_login,
+            deezer_search,
+            deezer_download,
+            deezer_queue,
             transport,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Stop the headless Deemix server with us.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(downloads) = app.try_state::<Arc<Downloads>>() {
+                    downloads.deemix.shutdown();
+                }
+            }
+        });
 }

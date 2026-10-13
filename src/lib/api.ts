@@ -167,6 +167,45 @@ export interface LibraryMatch extends LibraryTrack {
   stereo: number | null;
 }
 
+/** Headless Deemix (Deezer search and downloads) state. */
+export interface DeezerStatus {
+  /** Deemix is in /Applications. */
+  installed: boolean;
+  loggedIn: boolean;
+  user: string | null;
+  /** The account can download FLAC. */
+  lossless: boolean;
+}
+
+export interface DeezerTrack {
+  id: number;
+  title: string;
+  artist: string;
+  album: string;
+  albumId: number;
+  duration: number;
+  cover: string | null;
+}
+
+export type DownloadKind = "track" | "album";
+
+export interface DownloadItem {
+  uuid: string;
+  kind: DownloadKind;
+  id: number;
+  title: string;
+  artist: string;
+  /** Tracks in the item, and how many are downloaded or failed. */
+  size: number;
+  downloaded: number;
+  failed: number;
+  /** 0–100. */
+  progress: number;
+  status: "inQueue" | "downloading" | "completed" | "withErrors" | "failed";
+  /** Files written, once finished; an album has one per track. */
+  files: { trackId: number; path: string }[];
+}
+
 /** Relative weight of tonal, dynamics and stereo distances. */
 export type MatchWeights = [number, number, number];
 
@@ -256,4 +295,9 @@ export const api = {
   similarTracks: (features: Features, exclude: string[], weights: MatchWeights, limit: number) =>
     invoke<LibraryMatch[]>("similar_tracks", { features, exclude, weights, limit }),
   searchLibrary: (query: string, limit: number) => invoke<LibraryTrack[]>("search_library", { query, limit }),
+  deezerConnect: () => invoke<DeezerStatus>("deezer_connect"),
+  deezerLogin: (arl: string) => invoke<DeezerStatus>("deezer_login", { arl }),
+  deezerSearch: (query: string, limit: number) => invoke<DeezerTrack[]>("deezer_search", { query, limit }),
+  deezerDownload: (kind: DownloadKind, id: number) => invoke<void>("deezer_download", { kind, id }),
+  deezerQueue: () => invoke<DownloadItem[]>("deezer_queue"),
 };

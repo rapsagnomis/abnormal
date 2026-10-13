@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { api, SLOT_LABELS, SLOTS } from "../lib/api";
 import type { AnalysisReport, LibraryMatch, LibraryStatus, LibraryTrack, MatchWeights, Slot } from "../lib/api";
 import { formatTime } from "../lib/format";
+import { DeezerResults } from "./DeezerResults";
+import { LoadButtons } from "./LoadButtons";
 import { fmt } from "../lib/metrics";
 
 type Focus = "all" | "tonal" | "dynamics" | "stereo";
@@ -15,6 +17,8 @@ const FOCUS: [Focus, string, MatchWeights][] = [
 const LIMIT = 30;
 const SEARCH_LIMIT = 100;
 const SEARCH_DEBOUNCE_MS = 150;
+/** Library hits shown before "Show all", so the Deezer results stay in view. */
+const SEARCH_PREVIEW = 8;
 /** While indexing, refresh matches every this many newly indexed tracks. */
 const REFRESH_EVERY = 100;
 
@@ -27,7 +31,7 @@ interface Props {
   onRescan: () => void;
 }
 
-export function SimilarView({ reports, paths, status, onLoad, onRescan }: Props) {
+export function LibraryView({ reports, paths, status, onLoad, onRescan }: Props) {
   const [query, setQuery] = useState("");
   const searching = query.trim() !== "";
 
@@ -37,7 +41,7 @@ export function SimilarView({ reports, paths, status, onLoad, onRescan }: Props)
       <input
         type="search"
         className="library-search"
-        placeholder="Search library by artist, album or title"
+        placeholder="Search your library and Deezer by artist, album or title"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         // Keep typing out of the global shortcuts (space, 1/2, L, M…).
@@ -47,7 +51,10 @@ export function SimilarView({ reports, paths, status, onLoad, onRescan }: Props)
         }}
       />
       {searching ? (
-        <SearchResults query={query.trim()} paths={paths} indexed={status?.indexed ?? 0} onLoad={onLoad} />
+        <>
+          <SearchResults query={query.trim()} paths={paths} status={status} onLoad={onLoad} />
+          <DeezerResults query={query.trim()} paths={paths} onLoad={onLoad} />
+        </>
       ) : (
         <Matches reports={reports} paths={paths} status={status} onLoad={onLoad} />
       )}
@@ -55,8 +62,10 @@ export function SimilarView({ reports, paths, status, onLoad, onRescan }: Props)
   );
 }
 
-function SearchResults({ query, paths, indexed, onLoad }: { query: string; paths: Props["paths"]; indexed: number; onLoad: Props["onLoad"] }) {
+function SearchResults({ query, paths, status, onLoad }: { query: string; paths: Props["paths"]; status: LibraryStatus | null; onLoad: Props["onLoad"] }) {
   const [tracks, setTracks] = useState<LibraryTrack[] | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => setShowAll(false), [query]);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,18 +79,28 @@ function SearchResults({ query, paths, indexed, onLoad }: { query: string; paths
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query, Math.floor(indexed / REFRESH_EVERY)]);
+    // Also refresh when a scan ends, so a track that was just downloaded shows up.
+  }, [query, Math.floor((status?.indexed ?? 0) / REFRESH_EVERY), status?.scanning]);
 
-  if (tracks === null) return <p className="chart-note">Searching…</p>;
-  if (tracks.length === 0) return <p className="chart-note">No library track matches “{query}”.</p>;
+  const heading = <h3 className="results-heading">In your library</h3>;
+  if (tracks === null) return <>{heading}<p className="chart-note">Searching…</p></>;
+  if (tracks.length === 0) return <>{heading}<p className="chart-note">No library track matches “{query}”.</p></>;
   return (
     <>
+      {heading}
       <ol className="matches">
-        {tracks.map((t) => (
+        {(showAll ? tracks : tracks.slice(0, SEARCH_PREVIEW)).map((t) => (
           <TrackRow key={t.path} track={t} paths={paths} onLoad={onLoad} />
         ))}
       </ol>
-      {tracks.length === SEARCH_LIMIT && <p className="chart-note">Showing the first {SEARCH_LIMIT}: add words to narrow down.</p>}
+      {!showAll && tracks.length > SEARCH_PREVIEW ? (
+        <button className="show-all" onClick={() => setShowAll(true)}>
+          Show all {tracks.length}
+          {tracks.length === SEARCH_LIMIT && "+"}
+        </button>
+      ) : (
+        tracks.length === SEARCH_LIMIT && <p className="chart-note">Showing the first {SEARCH_LIMIT}: add words to narrow down.</p>
+      )}
     </>
   );
 }
@@ -219,20 +238,7 @@ function TrackRow({ track: t, match: m, paths, onLoad }: { track: LibraryTrack; 
         </div>
       </div>
       <div className="match-load">
-        {SLOTS.map((slot) => {
-          const loaded = paths[slot] === t.path;
-          const label = SLOT_LABELS[slot];
-          return (
-            <button
-              key={slot}
-              className={`col-${label.toLowerCase()}${loaded ? " on" : ""}`}
-              onClick={() => onLoad(slot, t.path)}
-              title={loaded ? `Loaded in ${label}: click to reload` : `Load in ${label}`}
-            >
-              {loaded ? `In ${label}` : `Load ${label}`}
-            </button>
-          );
-        })}
+        <LoadButtons path={t.path} paths={paths} onLoad={onLoad} />
       </div>
     </li>
   );

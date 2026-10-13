@@ -6,7 +6,7 @@ import type { Section, Tab } from "../lib/metrics";
 import { FrequencyChart } from "./FrequencyChart";
 import { Goniometer } from "./Goniometer";
 import { HistogramChart } from "./HistogramChart";
-import { SimilarView } from "./SimilarView";
+import { LibraryView } from "./LibraryView";
 
 export type Scope = "full" | "selection";
 export type { Tab };
@@ -17,7 +17,7 @@ const TABS: [Tab, string][] = [
   ["tonal", "Tonal"],
   ["stereo", "Stereo"],
   ["eq", "EQ match"],
-  ["similar", "Similar"],
+  ["library", "Library"],
 ];
 
 interface Props {
@@ -108,8 +108,8 @@ export function AnalysisPanel(p: Props) {
           passages={p.eqPassages}
           onListen={p.onListen}
         />
-      ) : p.tab === "similar" ? (
-        <SimilarView reports={p.reports} paths={p.paths} status={p.library} onLoad={p.onLoad} onRescan={p.onRescan} />
+      ) : p.tab === "library" ? (
+        <LibraryView reports={p.reports} paths={p.paths} status={p.library} onLoad={p.onLoad} onRescan={p.onRescan} />
       ) : (
         <MetricsTable sections={SECTIONS[p.tab]} {...p} />
       )}

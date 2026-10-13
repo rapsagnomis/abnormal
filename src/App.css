@@ -857,6 +857,66 @@ kbd {
   outline: none;
   border-color: #3d4450;
 }
+.results-heading {
+  margin: 4px 0 -4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.show-all {
+  align-self: flex-start;
+  margin-top: -6px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+/* ── Deezer (via headless Deemix) ──────────────────── */
+
+.deezer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.deezer-login {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.deezer-login .row {
+  display: flex;
+  gap: 6px;
+}
+.deezer-login .chart-note {
+  margin: 0;
+}
+.deezer-row .cover {
+  width: 30px;
+  height: 30px;
+  border-radius: 4px;
+  background: var(--panel-raised);
+  object-fit: cover;
+}
+.match-load .download {
+  padding: 1px 7px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 62px;
+}
+.match-load .download.done:disabled {
+  opacity: 1;
+  color: var(--text-dim);
+  background: transparent;
+}
+.match-load .download.failed {
+  color: var(--danger);
+}
+.match-load .download.busy:disabled {
+  opacity: 1;
+  color: var(--a);
+  border-color: color-mix(in srgb, var(--a) 40%, var(--border));
+}
 
 /* ── Sections strip ────────────────────────────────── */
 

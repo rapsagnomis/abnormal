@@ -1,7 +1,49 @@
-# Tauri + React + Typescript
+# Sonic Compare
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+A desktop tool to analyse a track and compare its sonic characteristics with a reference: loudness, dynamics, tonal balance and stereo image, plus EQ suggestions to move your track towards the reference.
 
-## Recommended IDE Setup
+Built with [Tauri](https://tauri.app) — a Rust audio/analysis core and a React + TypeScript UI. Everything runs locally.
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+## Features
+
+- **Load** mp3, flac or wav into slot **A** (your track) and **B** (reference): drag and drop or *Open…*.
+- **Play** both tracks in sync and switch A/B with a short crossfade (`Tab`, `1`/`2`). Loudness-match playback (`M`) to compare tone rather than level.
+- **Navigate**: click to seek, drag to select and loop (`L`), zoom with the wheel or pinch, link playheads/selections/zoom across tracks (`K`).
+- **Measure** full tracks or selections — a lane without a selection is measured as a whole, so you can compare your chorus against the full reference. To compare two parts of one song, load it in both slots.
+
+| Tab | What it shows |
+|---|---|
+| Loudness | Integrated / max short-term / max momentary LUFS, LRA, true peak, sample peak, PLR (EBU R128 / BS.1770-4) |
+| Dynamics | Crest factor, PSR, onsets and attack rise, TT DR, short-term percentiles, loudness and crest distributions |
+| Tonal | Loudness-normalised spectrum (1/6 oct), A − B difference, centroid, tilt, 7 band levels |
+| Stereo | Phase correlation, side/mid, L/R balance, width per band and per frequency, goniometers |
+| EQ match | Up to 6 bell/shelf moves for A to approach B, with the needed vs. suggested curve |
+
+Curves can be overlaid on the waveforms: momentary or short-term loudness, PSR, or correlation (`C` cycles). **Export report** saves the comparison as Markdown or a JSON summary.
+
+## Running
+
+Requirements: [Node.js](https://nodejs.org) and [Rust](https://rustup.rs).
+
+```sh
+npm install
+npm run tauri dev     # development, with hot reload
+npm run tauri build   # release app in src-tauri/target/release/bundle/
+```
+
+## Tests
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+The suite checks the analysis against reference signals (EBU Tech 3341/3342 loudness cases, known DR, spectra and correlations). Tests that need audio files are skipped unless their environment variables are set — see `src-tauri/src/tests.rs`.
+
+## Project layout
+
+```
+src-tauri/src/   decode, player (playback), peaks, loudness, dynamics,
+                 spectrum, stereo, eq, lib (Tauri commands)
+src/             App, components (lanes, waveform, panel, charts), lib (API, metrics, report)
+PLAN.md          design decisions and build phases
+```

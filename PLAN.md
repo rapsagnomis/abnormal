@@ -1,4 +1,4 @@
-# Sonic Compare — Plan
+# (a/b)normal — Plan
 
 Desktop tool to analyse and compare the sonic characteristics of a song against a reference track.
 

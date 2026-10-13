@@ -324,7 +324,7 @@ export default function App() {
 
   const exportReport = async () => {
     const path = await save({
-      defaultPath: "Sonic Compare report.md",
+      defaultPath: "abnormal report.md",
       filters: [
         { name: "Markdown report", extensions: ["md"] },
         { name: "JSON summary", extensions: ["json"] },
@@ -562,7 +562,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Sonic Compare</h1>
+        <h1>(a/b)normal</h1>
         <div className="header-actions">
           {exportStatus && <span className="audio-status">{exportStatus}</span>}
           <button onClick={exportReport} disabled={!shown[0] && !shown[1]} title="Save the current comparison as a Markdown report or JSON summary">

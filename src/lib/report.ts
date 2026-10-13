@@ -35,7 +35,7 @@ function metricRows(input: ReportInput) {
 
 export function reportMarkdown(input: ReportInput): string {
   const lines: string[] = [];
-  lines.push("# Sonic Compare report", "", `Generated ${new Date().toLocaleString()}`, "");
+  lines.push("# (a/b)normal report", "", `Generated ${new Date().toLocaleString()}`, "");
   lines.push("| | Track | Format | Measured |", "|---|---|---|---|");
   input.tracks.forEach((t, i) => {
     if (t) {

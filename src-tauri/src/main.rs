@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    sonic_compare_lib::run()
+    abnormal_lib::run()
 }

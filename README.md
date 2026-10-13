@@ -1,4 +1,4 @@
-# Sonic Compare
+# (a/b)normal
 
 A desktop tool to analyse a track and compare its sonic characteristics with a reference: loudness, dynamics, tonal balance and stereo image, plus EQ suggestions to move your track towards the reference.
 

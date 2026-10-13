@@ -1,12 +1,12 @@
 [package]
-name = "sonic-compare"
+name = "abnormal"
 version = "0.1.0"
 description = "Analyse and compare the sonic characteristics of songs"
 authors = ["Simon Gaspar"]
 edition = "2024"
 
 [lib]
-name = "sonic_compare_lib"
+name = "abnormal_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

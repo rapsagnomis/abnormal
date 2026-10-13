@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Sonic Compare",
+  "productName": "abnormal",
   "version": "0.1.0",
   "identifier": "com.simongaspar.soniccompare",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Sonic Compare",
+        "title": "(a/b)normal",
         "width": 1280,
         "height": 800,
         "minWidth": 900,

@@ -283,7 +283,7 @@ export default function App() {
   // Band levels over time, for whatever is being measured: used to find where each EQ move matters.
   const activityKey = SLOTS.map((s) => `${tracks[s]?.path ?? ""}@${useSelection(s) ? `${regions[s]!.start}-${regions[s]!.end}` : "full"}`).join("|");
   useEffect(() => {
-    if (tab !== "eq") return;
+    if (tab !== "tonal") return;
     let cancelled = false;
     const timer = setTimeout(() => {
       Promise.all(

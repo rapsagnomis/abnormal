@@ -1,6 +1,6 @@
 import type { AnalysisReport } from "./api";
 
-export type Tab = "loudness" | "dynamics" | "tonal" | "stereo" | "eq" | "library";
+export type Tab = "loudness" | "dynamics" | "tonal" | "stereo" | "library";
 
 /** Streaming platforms commonly ask for a true-peak ceiling of −1 dBTP. */
 export const TRUE_PEAK_CEILING = -1;
@@ -153,7 +153,7 @@ const STEREO: Section[] = [
 ];
 
 /** Metric tables per tab; the EQ and Similar tabs have their own views. */
-export const SECTIONS: Record<Exclude<Tab, "eq" | "library">, Section[]> = { loudness: LOUDNESS, dynamics: DYNAMICS, tonal: TONAL, stereo: STEREO };
+export const SECTIONS: Record<Exclude<Tab, "library">, Section[]> = { loudness: LOUDNESS, dynamics: DYNAMICS, tonal: TONAL, stereo: STEREO };
 
 /** "+1.2", "−", etc. Values in tables and reports share this format. */
 export const fmt = (v: number | null | undefined, digits = 1, signed = false) =>

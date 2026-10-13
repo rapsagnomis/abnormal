@@ -16,7 +16,6 @@ const TABS: [Tab, string][] = [
   ["dynamics", "Dynamics"],
   ["tonal", "Tonal"],
   ["stereo", "Stereo"],
-  ["eq", "EQ match"],
   ["library", "Library"],
 ];
 
@@ -95,20 +94,7 @@ export function AnalysisPanel(p: Props) {
         </p>
       )}
 
-      {p.tab === "eq" ? (
-        <EqView
-          eq={p.eq}
-          freqs={freqs}
-          hasBoth={!!(ra && rb)}
-          active={p.eqActive}
-          audition={p.eqAudition}
-          compensation={p.eqCompensation}
-          onActive={p.onEqActive}
-          onAudition={p.onEqAudition}
-          passages={p.eqPassages}
-          onListen={p.onListen}
-        />
-      ) : p.tab === "library" ? (
+      {p.tab === "library" ? (
         <LibraryView reports={p.reports} paths={p.paths} status={p.library} onLoad={p.onLoad} onRescan={p.onRescan} />
       ) : (
         <MetricsTable sections={SECTIONS[p.tab]} {...p} />
@@ -171,6 +157,21 @@ export function AnalysisPanel(p: Props) {
             ]}
           />
           <p className="chart-note">Positive: A has more energy there than B at equal loudness.</p>
+          <section className="panel-section">
+            <h3 className="results-heading">EQ match</h3>
+            <EqView
+              eq={p.eq}
+              freqs={freqs}
+              hasBoth={!!(ra && rb)}
+              active={p.eqActive}
+              audition={p.eqAudition}
+              compensation={p.eqCompensation}
+              onActive={p.onEqActive}
+              onAudition={p.onEqAudition}
+              passages={p.eqPassages}
+              onListen={p.onListen}
+            />
+          </section>
         </>
       )}
 

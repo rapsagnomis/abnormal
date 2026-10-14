@@ -30,6 +30,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "fileAssociations": [
+      { "ext": ["wav", "wave"], "name": "WAV audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["com.microsoft.waveform-audio"] },
+      { "ext": ["flac"], "name": "FLAC audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["org.xiph.flac"] },
+      { "ext": ["mp3"], "name": "MP3 audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.mp3"] }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

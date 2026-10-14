@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { api, AUDIO_EXTENSIONS, isAudioFile, SLOTS } from "./lib/api";
 import type {
   AnalysisReport,
@@ -32,7 +32,6 @@ import { AnalysisPanel } from "./components/AnalysisPanel";
 import type { AuditionKind, Scope, Tab } from "./components/AnalysisPanel";
 import { overlayFor } from "./lib/overlay";
 import type { CurveMode } from "./lib/overlay";
-import { reportJson, reportMarkdown } from "./lib/report";
 import { matchingPart } from "./lib/structure";
 import type { Part } from "./lib/structure";
 import "./App.css";
@@ -86,7 +85,6 @@ export default function App() {
   const [eq, setEq] = useState<MatchReport | null>(null);
   /** Measure the EQ match over the loudest parts only (Matchering's gating). */
   const [eqLoudest, setEqLoudest] = useState(false);
-  const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [library, setLibrary] = useState<LibraryStatus | null>(null);
   const [display, setDisplay] = useState<Display>("wave");
   const [sections, setSections] = useState<Pair<Section[] | null>>(pair(null));
@@ -188,7 +186,7 @@ export default function App() {
     setStructurePending((p) => setAt(p, slot, false));
   };
 
-  const loadFile = useCallback(async (slot: Slot, path: string) => {
+  const loadFile = useCallback(async (slot: Slot, path: string, play = false) => {
     if (!isAudioFile(path)) {
       setErrors((e) => setAt(e, slot, `Unsupported file type: ${path.split("/").pop()}`));
       return;
@@ -205,6 +203,11 @@ export default function App() {
       // First track loaded: make sure we're listening to something.
       const { tracks: current, transport: tr } = latest.current;
       if (!current[tr.active]) await api.setActive(slot);
+      // Opened from Finder while idle: listen to it straight away.
+      if (play && !latest.current.transport.playing) {
+        await api.setActive(slot);
+        await api.setPlaying(true);
+      }
     } catch (err) {
       setErrors((e) => setAt(e, slot, String(err)));
       return;
@@ -232,7 +235,7 @@ export default function App() {
   }, []);
 
   const loadPaths = useCallback(
-    (paths: string[], target: Slot | null) => {
+    (paths: string[], target: Slot | null, play = false) => {
       const audio = paths.filter(isAudioFile);
       if (audio.length === 0) {
         if (paths.length) {
@@ -241,13 +244,13 @@ export default function App() {
         return;
       }
       if (audio.length >= 2) {
-        loadFile(0, audio[0]);
+        loadFile(0, audio[0], play);
         loadFile(1, audio[1]);
         return;
       }
       const { tracks: current } = latest.current;
       const slot = target ?? (current[0] ? (current[1] ? 0 : 1) : 0);
-      loadFile(slot, audio[0]);
+      loadFile(slot, audio[0], play);
     },
     [loadFile],
   );
@@ -270,6 +273,17 @@ export default function App() {
         setDropSlot(null);
       }
     });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [loadPaths]);
+
+  // Files opened from Finder (double-click / Open With), including the ones that launched us.
+  useEffect(() => {
+    const take = () =>
+      api.takeOpenedFiles().then((paths) => paths.length && loadPaths(paths, null, true));
+    const unlisten = listen("open-files", take);
+    take();
     return () => {
       unlisten.then((fn) => fn());
     };
@@ -415,26 +429,6 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shown[0], shown[1], eqLoudest]);
-
-  const exportReport = async () => {
-    const path = await save({
-      defaultPath: "abnormal report.md",
-      filters: [
-        { name: "Markdown report", extensions: ["md"] },
-        { name: "JSON summary", extensions: ["json"] },
-      ],
-    });
-    if (!path) return;
-    const input = { tracks, reports: shown, scope: effectiveScope, regions, eq, loudest: eqLoudest };
-    const contents = path.toLowerCase().endsWith(".json") ? reportJson(input) : reportMarkdown(input);
-    try {
-      await api.writeTextFile(path, contents);
-      setExportStatus(`Saved ${path.split("/").pop()}`);
-    } catch (err) {
-      setExportStatus(String(err));
-    }
-    setTimeout(() => setExportStatus(null), 4000);
-  };
 
   const overlays = useMemo<Pair<ReturnType<typeof overlayFor>>>(
     () => [overlayFor(curveMode, reports[0], shown[0]), overlayFor(curveMode, reports[1], shown[1])],
@@ -708,10 +702,6 @@ export default function App() {
       <header className="app-header">
         <h1>(a/b)normal</h1>
         <div className="header-actions">
-          {exportStatus && <span className="audio-status">{exportStatus}</span>}
-          <button onClick={exportReport} disabled={!shown[0] && !shown[1]} title="Save the current comparison as a Markdown report or JSON summary">
-            Export report
-          </button>
           <span className={`audio-status${audioStatus?.error ? " error" : ""}`}>
             {audioStatus?.error
               ? `Audio output unavailable: ${audioStatus.error}`

@@ -344,6 +344,8 @@ export const isAudioFile = (path: string) =>
 
 export const api = {
   audioStatus: () => invoke<AudioStatus>("audio_status"),
+  /** Files opened from Finder since the last call. */
+  takeOpenedFiles: () => invoke<string[]>("take_opened_files"),
   loadTrack: (slot: Slot, path: string) => invoke<TrackInfo>("load_track", { slot, path }),
   unloadTrack: (slot: Slot) => invoke<void>("unload_track", { slot }),
   setPlaying: (playing: boolean) => invoke<void>("set_playing", { playing }),
@@ -378,7 +380,6 @@ export const api = {
   renderFullMatch: (slot: Slot, curves: { mid: number[]; side: number[] } | null) =>
     invoke<boolean>("render_full_match", { slot, curves }),
   setFullMatch: (slot: Slot, enabled: boolean) => invoke<void>("set_full_match", { slot, enabled }),
-  writeTextFile: (path: string, contents: string) => invoke<void>("write_text_file", { path, contents }),
   /** The user's Pro-Q 4 "Default Setting" preset text, if any. */
   proQTemplate: () => invoke<string | null>("pro_q_template"),
   libraryStatus: () => invoke<LibraryStatus>("library_status"),

@@ -50,6 +50,9 @@ struct AppState {
     audio_error: Option<String>,
     /// Original-rate decoded audio, kept for analysis.
     tracks: Arc<Mutex<[Option<Arc<AudioData>>; SLOTS]>>,
+    /// Files opened via Finder ("Open With", double-click) not yet picked up by the UI, which
+    /// may not be listening yet on a cold launch.
+    opened: Mutex<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -76,6 +79,12 @@ struct AudioStatus {
 
 fn check_slot(slot: usize) -> Result<(), String> {
     if slot < SLOTS { Ok(()) } else { Err(format!("invalid slot {slot}")) }
+}
+
+/// Drain the files the OS asked us to open (see `RunEvent::Opened` in `run`).
+#[tauri::command]
+fn take_opened_files(state: State<'_, AppState>) -> Vec<String> {
+    std::mem::take(&mut *state.opened.lock().unwrap())
 }
 
 #[tauri::command]
@@ -312,12 +321,6 @@ fn pro_q_template(app: tauri::AppHandle) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     // Old presets carried over from Pro-Q 3 can be binary; only the text format is a template.
     text.contains("[Parameters]").then_some(text)
-}
-
-/// Write a report to a path the user picked in the save dialog.
-#[tauri::command]
-async fn write_text_file(path: String, contents: String) -> Result<(), String> {
-    std::fs::write(&path, contents).map_err(|e| format!("could not write {path}: {e}"))
 }
 
 #[tauri::command]
@@ -581,6 +584,7 @@ pub fn run() {
             player,
             audio_error,
             tracks: Arc::new(Mutex::new([None, None])),
+            opened: Mutex::new(Vec::new()),
         })
         .setup(|app| {
             let root = app.path().home_dir()?.join(LIBRARY_DIR);
@@ -597,6 +601,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             audio_status,
+            take_opened_files,
             load_track,
             unload_track,
             set_playing,
@@ -615,7 +620,6 @@ pub fn run() {
             spectrogram,
             sections,
             band_activity,
-            write_text_file,
             pro_q_template,
             library_status,
             rescan_library,
@@ -635,12 +639,23 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
+        .run(|app, event| match event {
             // Stop the headless Deemix server with us.
-            if let tauri::RunEvent::Exit = event {
+            tauri::RunEvent::Exit => {
                 if let Some(downloads) = app.try_state::<Arc<Downloads>>() {
                     downloads.deemix.shutdown();
                 }
             }
+            // Files opened from Finder: queue them, and tell the UI to come and get them.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                let paths = urls.iter().filter_map(|u| u.to_file_path().ok());
+                let paths: Vec<String> = paths.map(|p| p.to_string_lossy().into_owned()).collect();
+                if !paths.is_empty() {
+                    app.state::<AppState>().opened.lock().unwrap().extend(paths);
+                    let _ = app.emit("open-files", ());
+                }
+            }
+            _ => {}
         });
 }

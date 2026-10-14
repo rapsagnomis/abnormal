@@ -22,7 +22,7 @@ Built with [Tauri](https://tauri.app) — a Rust audio/analysis core and a React
 
 **Library**: every mp3, flac and wav under `~/Music/albums` (all subfolders) is analysed in the background and kept in a database (`library.json` in the app data folder). At each start only new or changed files are analysed, and deleted ones are dropped; *Rescan* in the Similar tab does the same on demand. The first run over a large library takes a while — matches fill in as it goes.
 
-Curves can be overlaid on the waveforms: momentary or short-term loudness, PSR, or correlation (`C` cycles). **Export report** saves the comparison as Markdown or a JSON summary.
+Curves can be overlaid on the waveforms: momentary or short-term loudness, PSR, or correlation (`C` cycles).
 
 ## Running
 

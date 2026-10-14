@@ -540,17 +540,22 @@ mod structure_and_activity {
 }
 
 mod eq {
-    use crate::eq::{Filter, FilterKind, suggest};
-    use crate::spectrum::grid;
+    use std::f64::consts::PI;
+
+    use super::spectrum_and_stereo::noise;
+    use crate::decode::AudioData;
+    use crate::eq::{Filter, FilterKind, Placement, match_eq, suggest};
+    use crate::fir;
+    use crate::spectrum::{MidSide, grid, mid_side};
 
     #[test]
     fn biquads_match_their_analog_prototypes() {
         let rate = 48000.0;
         for f in [
-            Filter { kind: FilterKind::Peak, freq: 1000.0, gain: 4.0, q: 1.0 },
-            Filter { kind: FilterKind::Peak, freq: 80.0, gain: -3.0, q: 0.7 },
-            Filter { kind: FilterKind::LowShelf, freq: 200.0, gain: -3.0, q: 0.707 },
-            Filter { kind: FilterKind::HighShelf, freq: 3000.0, gain: 2.5, q: 0.707 },
+            Filter::stereo(FilterKind::Peak, 1000.0, 4.0, 1.0),
+            Filter::stereo(FilterKind::Peak, 80.0, -3.0, 0.7),
+            Filter::stereo(FilterKind::LowShelf, 200.0, -3.0, 0.707),
+            Filter::stereo(FilterKind::HighShelf, 3000.0, 2.5, 0.707),
         ] {
             let bq = f.biquad(rate);
             // The bilinear transform warps frequencies near Nyquist; compare where it doesn't.
@@ -574,13 +579,13 @@ mod eq {
 
     #[test]
     fn filter_prototypes_hit_their_gain() {
-        let peak = Filter { kind: FilterKind::Peak, freq: 1000.0, gain: 4.0, q: 1.0 };
+        let peak = Filter::stereo(FilterKind::Peak, 1000.0, 4.0, 1.0);
         assert!((peak.response_db(1000.0) - 4.0).abs() < 1e-9);
         assert!(peak.response_db(20.0).abs() < 0.05 && peak.response_db(20000.0).abs() < 0.05);
-        let low = Filter { kind: FilterKind::LowShelf, freq: 200.0, gain: -3.0, q: 0.707 };
+        let low = Filter::stereo(FilterKind::LowShelf, 200.0, -3.0, 0.707);
         assert!((low.response_db(10.0) + 3.0).abs() < 0.05 && low.response_db(10000.0).abs() < 0.05);
         assert!((low.response_db(200.0) + 1.5).abs() < 0.05, "shelf is half-gain at its corner");
-        let high = Filter { kind: FilterKind::HighShelf, freq: 5000.0, gain: 2.0, q: 0.707 };
+        let high = Filter::stereo(FilterKind::HighShelf, 5000.0, 2.0, 0.707);
         assert!((high.response_db(20000.0) - 2.0).abs() < 0.1 && high.response_db(100.0).abs() < 0.05);
     }
 
@@ -603,7 +608,7 @@ mod eq {
 
     #[test]
     fn recovers_a_presence_boost() {
-        let (freqs, track, reference) = shaped(&[Filter { kind: FilterKind::Peak, freq: 3000.0, gain: 4.0, q: 1.0 }]);
+        let (freqs, track, reference) = shaped(&[Filter::stereo(FilterKind::Peak, 3000.0, 4.0, 1.0)]);
         let r = suggest(&freqs, &track, &reference);
         let first = r.suggestions[0];
         assert_eq!(first.kind, FilterKind::Peak);
@@ -616,7 +621,7 @@ mod eq {
     #[test]
     fn recovers_a_darker_top_end_as_a_shelf() {
         let (freqs, track, reference) =
-            shaped(&[Filter { kind: FilterKind::HighShelf, freq: 6000.0, gain: -4.0, q: 0.707 }]);
+            shaped(&[Filter::stereo(FilterKind::HighShelf, 6000.0, -4.0, 0.707)]);
         let r = suggest(&freqs, &track, &reference);
         let shelf = r.suggestions.iter().find(|f| f.kind == FilterKind::HighShelf).expect("a high shelf");
         assert!(shelf.gain < -2.0, "gain {}", shelf.gain);
@@ -626,14 +631,136 @@ mod eq {
     #[test]
     fn two_moves_two_suggestions() {
         let (freqs, track, reference) = shaped(&[
-            Filter { kind: FilterKind::LowShelf, freq: 120.0, gain: 4.0, q: 0.707 },
-            Filter { kind: FilterKind::Peak, freq: 400.0, gain: -4.0, q: 1.4 },
+            Filter::stereo(FilterKind::LowShelf, 120.0, 4.0, 0.707),
+            Filter::stereo(FilterKind::Peak, 400.0, -4.0, 1.4),
         ]);
         let r = suggest(&freqs, &track, &reference);
         assert!(r.suggestions.len() >= 2 && r.suggestions.len() <= 4, "{:?}", r.suggestions);
         assert!(r.suggestions.iter().any(|f| f.gain > 0.0 && f.freq < 250.0));
         assert!(r.suggestions.iter().any(|f| f.gain < 0.0 && (250.0..700.0).contains(&f.freq)));
         assert!(r.error_after < 0.5);
+    }
+
+    /// Mid/side spectra: flat mid at -20 dB, side `side_db` below it plus `side_filters`.
+    fn mid_side_of(side_db: f64, side_filters: &[Filter]) -> MidSide {
+        let freqs = grid();
+        MidSide {
+            mid: vec![-20.0; freqs.len()],
+            side: freqs.iter().map(|&f| -20.0 + side_db + side_filters.iter().map(|x| x.response_db(f)).sum::<f64>()).collect(),
+            mono: false,
+        }
+    }
+
+    #[test]
+    fn wider_reference_is_a_width_change_not_eq() {
+        let r = match_eq(&grid(), &mid_side_of(-10.0, &[]), &mid_side_of(-7.0, &[]));
+        assert!(r.stereo.suggestions.is_empty(), "{:?}", r.stereo.suggestions);
+        let side = r.side.expect("stereo tracks get a side report");
+        let width = side.width.expect("a width change");
+        assert_eq!(width.placement, Placement::Side);
+        // +3 dB of side, less the loudness the extra side adds (matched away as level offset).
+        assert!(width.gain > 2.0 && width.gain < 3.0, "width {}", width.gain);
+        assert!(side.suggestions.is_empty(), "{:?}", side.suggestions);
+    }
+
+    #[test]
+    fn side_only_difference_gets_a_side_move() {
+        let bump = [Filter::stereo(FilterKind::Peak, 3000.0, 4.0, 1.0)];
+        let r = match_eq(&grid(), &mid_side_of(-8.0, &[]), &mid_side_of(-8.0, &bump));
+        let side = r.side.unwrap();
+        let first = side.suggestions.first().expect("a side move");
+        assert_eq!(first.placement, Placement::Side);
+        assert!(first.gain > 2.0 && (first.freq / 3000.0).log2().abs() < 0.3, "{first:?}");
+        assert!(side.error_after < 0.5 * side.error_before, "{} -> {}", side.error_before, side.error_after);
+    }
+
+    #[test]
+    fn mono_tracks_get_no_side_report() {
+        let mono = MidSide { mono: true, ..mid_side_of(-60.0, &[]) };
+        let r = match_eq(&grid(), &mono, &mid_side_of(-10.0, &[]));
+        assert!(r.side.is_none());
+        assert_eq!(r.full.side, r.full.mid);
+    }
+
+    #[test]
+    fn full_match_follows_the_difference() {
+        let freqs = grid();
+        let boost = Filter::stereo(FilterKind::Peak, 3000.0, 4.0, 1.0);
+        let reference = MidSide {
+            mid: freqs.iter().map(|&f| -20.0 + boost.response_db(f)).collect(),
+            ..mid_side_of(-10.0, &[boost])
+        };
+        let r = match_eq(&freqs, &mid_side_of(-10.0, &[]), &reference);
+        let at = |v: &[f32], hz: f64| v[freqs.iter().position(|&f| f >= hz).unwrap()] as f64;
+        // Local-linear smoothing over 3/8 octave rounds the top of the bell a little.
+        assert!((at(&r.full.total, 3000.0) - 4.0).abs() < 0.75, "{}", at(&r.full.total, 3000.0));
+        // Away from the bell only the removed level offset is left.
+        let offset = r.stereo.offset;
+        assert!((at(&r.full.mid, 100.0) + offset).abs() < 0.3 && (at(&r.full.side, 15000.0) + offset).abs() < 0.3);
+        // One bell matches a one-bell difference closely.
+        assert!(r.full.gap < 0.6, "gap {}", r.full.gap);
+    }
+
+    #[test]
+    fn loudest_parts_ignore_the_quiet_ones() {
+        let rate = 48000;
+        let tone = |freq: f64, amp: f64, secs: f64| -> Vec<f32> {
+            (0..(secs * rate as f64) as usize).map(|i| (amp * (2.0 * PI * freq * i as f64 / rate as f64).sin()) as f32).collect()
+        };
+        // 48 s loud 1 kHz, then 12 s of 100 Hz 10 dB quieter (above the -20 dB frame gate): the
+        // range splits into five 12 s pieces, the last one quiet.
+        let mut samples = tone(1000.0, 0.5, 48.0);
+        samples.extend(tone(100.0, 0.16, 12.0));
+        let audio = AudioData { sample_rate: rate, channels: vec![samples.clone(), samples] };
+        let at = |m: &MidSide, hz: f64| m.mid[grid().iter().position(|&f| f >= hz).unwrap()];
+        let all = mid_side(&audio, 0, audio.frames(), false).unwrap();
+        let loud = mid_side(&audio, 0, audio.frames(), true).unwrap();
+        assert!(at(&all, 100.0) > at(&all, 1000.0) - 25.0);
+        assert!(at(&loud, 100.0) < at(&loud, 1000.0) - 40.0, "{} vs {}", at(&loud, 100.0), at(&loud, 1000.0));
+    }
+
+    #[test]
+    fn flat_fir_passes_audio_unchanged_and_side_gain_scales_the_side() {
+        let (l, r) = (noise(3, 20000, 0.5), noise(4, 20000, 0.5));
+        let stereo: Vec<f32> = l.iter().zip(&r).flat_map(|(&a, &b)| [a, b]).collect();
+        let freqs = grid();
+        let n = fir::taps_for(48000.0);
+        let flat = fir::design(&freqs, &vec![0.0; freqs.len()], 48000.0, n);
+        let out = fir::filter_mid_side(&stereo, &flat, &flat);
+        assert_eq!(out.len(), stereo.len());
+        assert!(out.iter().zip(&stereo).all(|(a, b)| (a - b).abs() < 1e-4));
+
+        let double = fir::design(&freqs, &vec![6.0206; freqs.len()], 48000.0, n);
+        let wide = fir::filter_mid_side(&stereo, &flat, &double);
+        for (o, i) in wide.chunks(2).zip(stereo.chunks(2)).skip(100).take(1000) {
+            let (m, s) = ((i[0] + i[1]) / 2.0, (i[0] - i[1]) / 2.0);
+            assert!((o[0] - (m + 2.0 * s)).abs() < 1e-3 && (o[1] - (m - 2.0 * s)).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn fir_follows_a_shelf() {
+        let rate = 48000.0;
+        let freqs = grid();
+        let shelf = Filter::stereo(FilterKind::HighShelf, 2000.0, 6.0, 0.707);
+        let curve: Vec<f32> = freqs.iter().map(|&f| shelf.response_db(f) as f32).collect();
+        let n = fir::taps_for(rate);
+        let h = fir::design(&freqs, &curve, rate, n);
+        let gain_db = |hz: f64| {
+            let len = 48000;
+            let x: Vec<f32> = (0..len).flat_map(|i| {
+                let v = (2.0 * PI * hz * i as f64 / rate).sin() as f32 * 0.25;
+                [v, v]
+            }).collect();
+            let y = fir::filter_mid_side(&x, &h, &h);
+            let rms = |v: &[f32]| (v.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / v.len() as f64).sqrt();
+            let mid = len / 4 * 2..len * 3 / 4 * 2;
+            20.0 * (rms(&y[mid.clone()]) / rms(&x[mid])).log10()
+        };
+        for hz in [100.0, 1000.0, 2000.0, 8000.0] {
+            let (got, want) = (gain_db(hz), shelf.response_db(hz));
+            assert!((got - want).abs() < 0.3, "{hz} Hz: {got:.2} vs {want:.2}");
+        }
     }
 }
 
@@ -654,6 +781,24 @@ fn eq_real_pair() {
     println!("suggest: {:.2?}, offset {:.2} dB, error {:.2} -> {:.2} dB", t.elapsed(), r.offset, r.error_before, r.error_after);
     for f in &r.suggestions {
         println!("  {:?} {} Hz {:+.1} dB Q {}", f.kind, f.freq, f.gain, f.q);
+    }
+    for loudest in [false, true] {
+        let mid_side = |p: &std::ffi::OsStr| {
+            let audio = decode_file(std::path::Path::new(p)).unwrap();
+            crate::spectrum::mid_side(&audio, 0, audio.frames(), loudest).unwrap()
+        };
+        let t = std::time::Instant::now();
+        let m = crate::eq::match_eq(&crate::spectrum::grid(), &mid_side(&a), &mid_side(&b));
+        println!("match_eq (loudest {loudest}): {:.2?}, full-match gap {:.2} dB", t.elapsed(), m.full.gap);
+        for f in &m.stereo.suggestions {
+            println!("  stereo {:?} {} Hz {:+.1} dB Q {}", f.kind, f.freq, f.gain, f.q);
+        }
+        if let Some(side) = &m.side {
+            println!("  side: error {:.2} -> {:.2} dB, gap {:.2?}", side.error_before, side.error_after, m.full.side_gap);
+            for f in side.width.iter().chain(&side.suggestions) {
+                println!("  side {:?} {} Hz {:+.1} dB Q {}", f.kind, f.freq, f.gain, f.q);
+            }
+        }
     }
     if let Some(out) = std::env::var_os("SONIC_EQ_JSON") {
         std::fs::write(out, serde_json::to_string(&r).unwrap()).unwrap();

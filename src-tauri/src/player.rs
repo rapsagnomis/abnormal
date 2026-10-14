@@ -3,6 +3,9 @@
 //! Both tracks run simultaneously, each with its own playhead and loop region; the A/B switch
 //! only crossfades their gains. That keeps A and B in sync when they are aligned, while still
 //! allowing each track to be positioned (and looped) independently to compare different sections.
+//!
+//! A track can also carry an alternate rendering (the full EQ match), sample-aligned with it;
+//! switching to it is another crossfade.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -14,7 +17,8 @@ use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Resampler};
 
 use crate::decode::AudioData;
-use crate::eq::{Biquad, Filter};
+use crate::eq::{Biquad, Filter, Placement};
+use crate::fir;
 
 pub const SLOTS: usize = 2;
 const NONE: u64 = u64::MAX;
@@ -23,29 +27,41 @@ const FADE_SECONDS: f32 = 0.015;
 /// Trim changes glide with a one-pole filter; this scales its coefficient relative to the fade step.
 const TRIM_SMOOTHING: f32 = 0.5;
 const UNITY_BITS: u32 = 0x3f80_0000; // 1.0f32
-/// Most EQ moves a track can be auditioned with (suggestions are capped at 6).
-pub const MAX_EQ_STAGES: usize = 8;
+/// Most EQ moves a track can be auditioned with (6 stereo moves, a width change, 3 side moves).
+pub const MAX_EQ_STAGES: usize = 12;
 
 /// Playback EQ for one track. Filters run even while disabled so switching it on is a crossfade
 /// between warm signals, not a transient.
 #[derive(Clone, Copy, Default)]
 struct EqSettings {
     stages: [Biquad; MAX_EQ_STAGES],
+    /// Per stage: filter only the side (L − R), not both channels.
+    side: [bool; MAX_EQ_STAGES],
     count: usize,
     enabled: bool,
 }
 
-/// Transposed direct form II state, per stage and channel.
+/// Transposed direct form II state, per stage and channel (a side stage uses the first).
 type EqState = [[[f64; 2]; 2]; MAX_EQ_STAGES];
+
+fn biquad(q: &Biquad, z: &mut [f64; 2], x: f64) -> f64 {
+    let y = q.b0 * x + z[0];
+    z[0] = q.b1 * x - q.a1 * y + z[1];
+    z[1] = q.b2 * x - q.a2 * y;
+    y
+}
 
 fn run_eq(settings: &EqSettings, state: &mut EqState, l: f32, r: f32) -> (f32, f32) {
     let mut x = [l as f64, r as f64];
-    for (q, st) in settings.stages[..settings.count].iter().zip(state.iter_mut()) {
-        for (v, z) in x.iter_mut().zip(st.iter_mut()) {
-            let y = q.b0 * *v + z[0];
-            z[0] = q.b1 * *v - q.a1 * y + z[1];
-            z[1] = q.b2 * *v - q.a2 * y;
-            *v = y;
+    for ((q, st), &side) in settings.stages[..settings.count].iter().zip(state.iter_mut()).zip(&settings.side) {
+        if side {
+            let (m, s) = ((x[0] + x[1]) * 0.5, (x[0] - x[1]) * 0.5);
+            let s = biquad(q, &mut st[0], s);
+            x = [m + s, m - s];
+        } else {
+            for (v, z) in x.iter_mut().zip(st.iter_mut()) {
+                *v = biquad(q, z, *v);
+            }
         }
     }
     (x[0] as f32, x[1] as f32)
@@ -102,6 +118,13 @@ impl PlaybackBuffer {
     }
 }
 
+/// What is loaded in a slot: the track, and optionally an alternate rendering of it.
+#[derive(Default)]
+struct Loaded {
+    track: Option<Arc<PlaybackBuffer>>,
+    alt: Option<Arc<PlaybackBuffer>>,
+}
+
 /// State shared between the UI-facing commands and the audio callback.
 pub struct Shared {
     pub device_rate: AtomicU32,
@@ -118,7 +141,11 @@ pub struct Shared {
     seek_requests: [AtomicU64; SLOTS],
     loop_start: [AtomicU64; SLOTS],
     loop_end: [AtomicU64; SLOTS],
-    tracks: Mutex<[Option<Arc<PlaybackBuffer>>; SLOTS]>,
+    tracks: Mutex<[Loaded; SLOTS]>,
+    /// Play the alternate rendering instead of the track, per slot.
+    alt_enabled: [AtomicBool; SLOTS],
+    /// Bumped by each alternate render, so a slower earlier one can't replace a newer one.
+    alt_generation: [AtomicU64; SLOTS],
     /// Playback EQ per slot; the callback copies it when `eq_version` changes.
     eq: Mutex<[EqSettings; SLOTS]>,
     eq_version: AtomicU64,
@@ -147,7 +174,9 @@ impl Shared {
             seek_requests: [const { AtomicU64::new(NONE) }; SLOTS],
             loop_start: [const { AtomicU64::new(NONE) }; SLOTS],
             loop_end: [const { AtomicU64::new(NONE) }; SLOTS],
-            tracks: Mutex::new([None, None]),
+            tracks: Mutex::new(Default::default()),
+            alt_enabled: [const { AtomicBool::new(false) }; SLOTS],
+            alt_generation: [const { AtomicU64::new(0) }; SLOTS],
             eq: Mutex::new([EqSettings::default(); SLOTS]),
             eq_version: AtomicU64::new(0),
         }
@@ -167,9 +196,10 @@ impl Shared {
             self.loop_start[slot].store(NONE, Ordering::Relaxed);
             self.loop_end[slot].store(NONE, Ordering::Relaxed);
             self.seek_requests[slot].store(0, Ordering::Relaxed);
-            std::mem::replace(&mut tracks[slot], buffer.map(Arc::new))
+            self.alt_generation[slot].fetch_add(1, Ordering::Relaxed);
+            std::mem::replace(&mut tracks[slot], Loaded { track: buffer.map(Arc::new), alt: None })
         };
-        // Old buffer is dropped here, outside the lock and off the audio thread.
+        // Old buffers are dropped here, outside the lock and off the audio thread.
         drop(old);
     }
 
@@ -211,12 +241,49 @@ impl Shared {
     pub fn set_eq(&self, slot: usize, filters: &[Filter], enabled: bool) {
         let rate = self.rate();
         let mut settings = EqSettings { enabled, ..Default::default() };
-        for (stage, f) in settings.stages.iter_mut().zip(filters) {
+        for ((stage, side), f) in settings.stages.iter_mut().zip(settings.side.iter_mut()).zip(filters) {
             *stage = f.biquad(rate);
+            *side = f.placement == Placement::Side;
             settings.count += 1;
         }
         self.eq.lock().unwrap()[slot] = settings;
         self.eq_version.fetch_add(1, Ordering::Release);
+    }
+
+    /// Render the slot's track through linear-phase mid and side correction curves (dB on the
+    /// log-spaced `freqs`) as its alternate, or drop the alternate (`None`). Slow (a second or
+    /// so for a song); returns false if the track or a newer render replaced it meanwhile.
+    pub fn render_alt(&self, slot: usize, curves: Option<(&[f64], &[f32], &[f32])>) -> bool {
+        let generation = self.alt_generation[slot].fetch_add(1, Ordering::Relaxed) + 1;
+        let Some((freqs, mid, side)) = curves else {
+            let old = self.tracks.lock().unwrap()[slot].alt.take();
+            drop(old);
+            return true;
+        };
+        let Some(track) = self.tracks.lock().unwrap()[slot].track.clone() else { return false };
+        let rate = self.rate();
+        let taps = fir::taps_for(rate);
+        let samples = fir::filter_mid_side(
+            &track.samples,
+            &fir::design(freqs, mid, rate, taps),
+            &fir::design(freqs, side, rate, taps),
+        );
+        let alt = Arc::new(PlaybackBuffer { samples, frames: track.frames });
+        let old = {
+            let mut tracks = self.tracks.lock().unwrap();
+            let current = tracks[slot].track.as_ref().is_some_and(|t| Arc::ptr_eq(t, &track));
+            if !current || self.alt_generation[slot].load(Ordering::Relaxed) != generation {
+                return false;
+            }
+            tracks[slot].alt.replace(alt)
+        };
+        drop(old);
+        true
+    }
+
+    /// Play the alternate rendering (when there is one) instead of the track.
+    pub fn set_alt_enabled(&self, slot: usize, enabled: bool) {
+        self.alt_enabled[slot].store(enabled, Ordering::Relaxed);
     }
 
     pub fn set_loop_enabled(&self, enabled: bool) {
@@ -252,6 +319,8 @@ struct Mixer {
     eq_version: u64,
     /// Smoothed wet share of the EQ per track, 0–1.
     eq_mix: [f32; SLOTS],
+    /// Smoothed share of the alternate rendering per track, 0–1.
+    alt_mix: [f32; SLOTS],
 }
 
 impl Mixer {
@@ -289,6 +358,10 @@ impl Mixer {
         let playing = shared.playing.load(Ordering::Relaxed);
         let active = shared.active.load(Ordering::Relaxed);
         let looping = shared.loop_enabled.load(Ordering::Relaxed);
+        let alt_targets: [f32; SLOTS] = std::array::from_fn(|i| {
+            let on = shared.alt_enabled[i].load(Ordering::Relaxed) && tracks[i].alt.is_some();
+            if on { 1.0 } else { 0.0 }
+        });
         let trim_targets: [f32; SLOTS] =
             std::array::from_fn(|i| f32::from_bits(shared.trims[i].load(Ordering::Relaxed)));
         let volume_target = f32::from_bits(shared.volume.load(Ordering::Relaxed));
@@ -309,11 +382,17 @@ impl Mixer {
                     let target = if i == active { 1.0 } else { 0.0 };
                     self.gains[i] = approach(self.gains[i], target, self.fade_step);
                     self.trims[i] += (trim_targets[i] - self.trims[i]) * TRIM_SMOOTHING * self.fade_step;
-                    let Some(track) = &tracks[i] else { continue };
+                    let Some(track) = &tracks[i].track else { continue };
+                    self.alt_mix[i] = approach(self.alt_mix[i], alt_targets[i], self.fade_step);
                     if pos[i] < track.frames {
                         let idx = pos[i] as usize * 2;
                         let g = self.gains[i] * self.trims[i] * self.volume * self.master;
                         let (mut sl, mut sr) = (track.samples[idx], track.samples[idx + 1]);
+                        if let Some(alt) = tracks[i].alt.as_ref().filter(|_| self.alt_mix[i] > 0.0) {
+                            let m = self.alt_mix[i];
+                            sl += (alt.samples[idx] - sl) * m;
+                            sr += (alt.samples[idx + 1] - sr) * m;
+                        }
                         if self.eq[i].count > 0 {
                             let (wl, wr) = run_eq(&self.eq[i], &mut self.eq_state[i], sl, sr);
                             let target = if self.eq[i].enabled { 1.0 } else { 0.0 };
@@ -347,8 +426,8 @@ impl Mixer {
         let all_ended = tracks
             .iter()
             .zip(&pos)
-            .all(|(t, &p)| t.as_ref().is_none_or(|t| p >= t.frames));
-        if playing && all_ended && tracks.iter().any(Option::is_some) {
+            .all(|(t, &p)| t.track.as_ref().is_none_or(|t| p >= t.frames));
+        if playing && all_ended && tracks.iter().any(|t| t.track.is_some()) {
             shared.playing.store(false, Ordering::Relaxed);
         }
         for (slot, p) in shared.positions.iter().zip(pos) {
@@ -394,6 +473,7 @@ pub fn start() -> (Arc<Shared>, Result<u32>) {
                     eq_state: [[[[0.0; 2]; 2]; MAX_EQ_STAGES]; SLOTS],
                     eq_version: 0,
                     eq_mix: [0.0; SLOTS],
+                    alt_mix: [0.0; SLOTS],
                 };
                 let stream = device.build_output_stream::<f32, _, _>(
                     config,

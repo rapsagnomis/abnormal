@@ -3,6 +3,7 @@ mod decode;
 mod deemix;
 mod dynamics;
 mod eq;
+mod fir;
 mod library;
 mod loudness;
 mod peaks;
@@ -201,10 +202,27 @@ async fn range_peaks(
     .await
 }
 
-/// EQ moves for `track` to approach `reference` (loudness-normalised spectra on the shared grid).
+/// EQ match of A towards B over each track's range (`None` = whole track): stereo moves, side
+/// (width) moves and the full Matchering-style curves. `loudest` measures only the louder parts.
 #[tauri::command]
-fn suggest_eq(track: Vec<f32>, reference: Vec<f32>) -> eq::EqReport {
-    eq::suggest(&spectrum::grid(), &track, &reference)
+async fn match_eq(
+    ranges: [Option<(f64, f64)>; SLOTS],
+    loudest: bool,
+    state: State<'_, AppState>,
+) -> Result<eq::MatchReport, String> {
+    let [a, b] = state.tracks.lock().unwrap().clone();
+    let (Some(a), Some(b)) = (a, b) else {
+        return Err("load a track in A and a reference in B".into());
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let mid_side = |audio: &AudioData, range| {
+            let (start, end) = to_frame_range(audio, range);
+            spectrum::mid_side(audio, start, end, loudest).ok_or_else(|| "nothing to measure: silent range".to_string())
+        };
+        Ok(eq::match_eq(&spectrum::grid(), &mid_side(&a, ranges[0])?, &mid_side(&b, ranges[1])?))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Spectrogram of a time range as `rows × columns` bytes (row 0 = highest frequency), sent as a
@@ -254,10 +272,37 @@ fn set_eq(slot: usize, filters: Vec<eq::Filter>, enabled: bool, state: State<'_,
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+struct MatchCurves {
+    mid: Vec<f32>,
+    side: Vec<f32>,
+}
+
+/// Render a track's playback through the full-match curves (dB on the shared grid) so it can be
+/// switched to, or drop that rendering (`curves = None`). False if it was overtaken (a newer
+/// render, or a different track loaded meanwhile).
+#[tauri::command]
+async fn render_full_match(slot: usize, curves: Option<MatchCurves>, state: State<'_, AppState>) -> Result<bool, String> {
+    check_slot(slot)?;
+    let player = state.player.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let freqs = spectrum::grid();
+        player.render_alt(slot, curves.as_ref().map(|c| (&freqs[..], &c.mid[..], &c.side[..])))
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Play a track's full-match rendering instead of the track itself.
+#[tauri::command]
+fn set_full_match(slot: usize, enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    check_slot(slot)?;
+    state.player.set_alt_enabled(slot, enabled);
+    Ok(())
+}
+
 /// Pro-Q 4's user preset folder, relative to the home directory.
 const PRO_Q_PRESETS: &str = "Documents/FabFilter/Presets/Pro-Q 4";
-/// Subfolder of it that EQ-match presets are saved to (it shows up in Pro-Q's preset browser).
-const PRO_Q_FOLDER: &str = "abnormal";
 
 /// The user's Pro-Q 4 "Default Setting" preset, used as the template for EQ-match presets so
 /// they carry the user's own analyser and display settings. `None` if Pro-Q 4 has none.
@@ -267,22 +312,6 @@ fn pro_q_template(app: tauri::AppHandle) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     // Old presets carried over from Pro-Q 3 can be binary; only the text format is a template.
     text.contains("[Parameters]").then_some(text)
-}
-
-/// Save a Pro-Q 4 preset into Pro-Q's preset folder, returning where it went.
-#[tauri::command]
-fn save_pro_q_preset(name: String, contents: String, app: tauri::AppHandle) -> Result<String, String> {
-    let root = app.path().home_dir().map_err(|e| e.to_string())?.join(PRO_Q_PRESETS);
-    if !root.is_dir() {
-        return Err("Pro-Q 4's preset folder was not found: is Pro-Q 4 installed?".into());
-    }
-    let dir = root.join(PRO_Q_FOLDER);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    // File names can't hold path separators (or a leading dot, which would hide the preset).
-    let clean: String = name.chars().map(|c| if matches!(c, '/' | ':' | '\\') { '-' } else { c }).collect();
-    let path = dir.join(format!("{}.ffp", clean.trim().trim_start_matches('.')));
-    std::fs::write(&path, contents).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Write a report to a path the user picked in the save dialog.
@@ -580,13 +609,14 @@ pub fn run() {
             set_trims,
             set_volume,
             set_eq,
-            suggest_eq,
+            match_eq,
+            render_full_match,
+            set_full_match,
             spectrogram,
             sections,
             band_activity,
             write_text_file,
             pro_q_template,
-            save_pro_q_preset,
             library_status,
             rescan_library,
             similar_tracks,

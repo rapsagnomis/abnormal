@@ -1,4 +1,4 @@
-import type { EqFilter } from "./api";
+import type { EqFilter, MatchReport, SpectrumReport } from "./api";
 import { BANDS } from "./metrics";
 
 const BAND_EDGES = [20, 60, 250, 500, 2000, 4000, 8000, 20000];
@@ -13,14 +13,30 @@ export const formatHz = (f: number) => (f >= 1000 ? `${+(f / 1000).toFixed(2)} k
 
 export const formatGain = (g: number) => `${g > 0 ? "+" : ""}${g.toFixed(1)} dB`;
 
+export const isSide = (f: EqFilter) => f.placement === "side";
+
+/** The width change: a side shelf low enough to be flat over the audible range (see `eq.rs`). */
+export const isWidth = (f: EqFilter) => isSide(f) && f.kind === "highShelf" && f.freq <= 10;
+
+/** Every suggested move in table order: stereo moves, then the width change and side moves. */
+export const movesOf = (eq: MatchReport | null): EqFilter[] =>
+  eq ? [...eq.suggestions, ...(eq.side?.width ? [eq.side.width] : []), ...(eq.side?.suggestions ?? [])] : [];
+
+/** Type column: the width change is a side level, not a shelf to think about. */
+export const typeLabel = (f: EqFilter) => (isWidth(f) ? "Side level" : KIND_LABEL[f.kind]);
+
 function bandOf(freq: number) {
   const i = BAND_EDGES.findIndex((edge, k) => freq >= edge && freq < BAND_EDGES[k + 1]);
   return BANDS[Math.max(0, i)].toLowerCase();
 }
 
-/** Plain-language reading of a move, e.g. "More bass around 63 Hz" or "Less top end above 6 kHz". */
+/**
+ * Plain-language reading of a move, e.g. "More bass around 63 Hz", "Less top end above 6 kHz",
+ * or for side moves "Narrower low end below 110 Hz".
+ */
 export function describe(f: EqFilter): string {
-  const more = f.gain > 0 ? "More" : "Less";
+  if (isWidth(f)) return `${f.gain > 0 ? "Wider" : "Narrower"} overall`;
+  const more = isSide(f) ? (f.gain > 0 ? "Wider" : "Narrower") : f.gain > 0 ? "More" : "Less";
   switch (f.kind) {
     case "lowShelf":
       return `${more} low end below ${formatHz(f.freq)}`;
@@ -34,7 +50,11 @@ export function describe(f: EqFilter): string {
 /** One line per move, for the clipboard and reports. */
 export function eqAsText(filters: EqFilter[]): string {
   return filters
-    .map((f, i) => `${i + 1}. ${KIND_LABEL[f.kind]} ${formatHz(f.freq)} ${formatGain(f.gain)} Q ${f.q.toFixed(1)} (${describe(f)})`)
+    .map((f, i) =>
+      isWidth(f)
+        ? `${i + 1}. Side level ${formatGain(f.gain)} (${describe(f)})`
+        : `${i + 1}. ${isSide(f) ? "Side " : ""}${KIND_LABEL[f.kind]} ${formatHz(f.freq)} ${formatGain(f.gain)} Q ${f.q.toFixed(1)} (${describe(f)})`,
+    )
     .join("\n");
 }
 
@@ -61,6 +81,12 @@ export function responseDb(filter: EqFilter, f: number): number {
 export const curveOf = (filters: EqFilter[], freqs: number[]) =>
   freqs.map((f) => filters.reduce((sum, x) => sum + responseDb(x, f), 0));
 
+/** What `filters` do to the mid (stereo moves only) and to the side (all of them), dB. */
+export const midSideCurves = (filters: EqFilter[], freqs: number[]) => ({
+  mid: curveOf(filters.filter((f) => !isSide(f)), freqs),
+  side: curveOf(filters, freqs),
+});
+
 /** Approximate BS.1770 K-weighting: +4 dB high shelf around 1.7 kHz and a 38 Hz high-pass. */
 function kWeightDb(f: number): number {
   const shelf = responseDb({ kind: "highShelf", freq: 1681, gain: 4, q: Math.SQRT1_2 }, f);
@@ -70,17 +96,19 @@ function kWeightDb(f: number): number {
 }
 
 /**
- * How much louder `filters` make a track with spectrum `level` (dB per grid point), in LU.
- * Used to level-compensate EQ playback so switching it on doesn't just sound louder.
+ * How much louder mid and side corrections (dB per grid point) make a track with `spectrum`, in
+ * LU. Used to level-compensate EQ playback so switching it on doesn't just sound louder.
  */
-export function loudnessChange(freqs: number[], level: number[], filters: EqFilter[]): number {
-  if (filters.length === 0) return 0;
+export function loudnessChange(spectrum: SpectrumReport, mid: number[], side: number[]): number {
   let before = 0;
   let after = 0;
-  freqs.forEach((f, i) => {
-    const p = Math.pow(10, (level[i] + kWeightDb(f)) / 10);
+  spectrum.freqs.forEach((f, i) => {
+    const p = Math.pow(10, (spectrum.level[i] + kWeightDb(f)) / 10);
+    // Width is side − mid; no reading means no side signal.
+    const w = spectrum.width[i];
+    const sideShare = w === null ? 0 : 1 / (1 + Math.pow(10, -w / 10));
     before += p;
-    after += p * Math.pow(10, filters.reduce((s, x) => s + responseDb(x, f), 0) / 10);
+    after += p * ((1 - sideShare) * Math.pow(10, (mid[i] ?? 0) / 10) + sideShare * Math.pow(10, (side[i] ?? 0) / 10));
   });
   return before > 0 ? 10 * Math.log10(after / before) : 0;
 }

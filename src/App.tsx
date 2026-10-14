@@ -8,8 +8,8 @@ import type {
   AudioStatus,
   BandActivity,
   EqFilter,
-  EqReport,
   LibraryStatus,
+  MatchReport,
   Region,
   Section,
   Slot,
@@ -25,11 +25,11 @@ import type { View } from "./lib/view";
 import { clampView, fullView, isFull, zoomView } from "./lib/view";
 import { TrackLane } from "./components/TrackLane";
 import type { Display } from "./components/Waveform";
-import { loudnessChange } from "./lib/eq";
+import { isWidth, loudnessChange, midSideCurves, movesOf } from "./lib/eq";
 import { passageFor } from "./lib/passages";
 import { TransportBar, VOLUME_MIN_DB } from "./components/TransportBar";
 import { AnalysisPanel } from "./components/AnalysisPanel";
-import type { Scope, Tab } from "./components/AnalysisPanel";
+import type { AuditionKind, Scope, Tab } from "./components/AnalysisPanel";
 import { overlayFor } from "./lib/overlay";
 import type { CurveMode } from "./lib/overlay";
 import { reportJson, reportMarkdown } from "./lib/report";
@@ -83,13 +83,18 @@ export default function App() {
   const [curveMode, setCurveMode] = useState<CurveMode>("shortTerm");
   const [matchEnabled, setMatchEnabled] = useState(false);
   const [tab, setTab] = useState<Tab>("loudness");
-  const [eq, setEq] = useState<EqReport | null>(null);
+  const [eq, setEq] = useState<MatchReport | null>(null);
+  /** Measure the EQ match over the loudest parts only (Matchering's gating). */
+  const [eqLoudest, setEqLoudest] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [library, setLibrary] = useState<LibraryStatus | null>(null);
   const [display, setDisplay] = useState<Display>("wave");
   const [sections, setSections] = useState<Pair<Section[] | null>>(pair(null));
-  /** Audition the suggested EQ on A's playback. */
+  /** Audition the suggested EQ on A's playback: the chosen moves, or the full match. */
   const [eqAudition, setEqAudition] = useState(false);
+  const [auditionKind, setAuditionKind] = useState<AuditionKind>("moves");
+  /** The match A's full-match rendering was made for (rendering takes a moment). */
+  const [fullRendered, setFullRendered] = useState<MatchReport | null>(null);
   const [volumeDb, setVolumeDb] = useState(loadVolume);
   const [eqActive, setEqActive] = useState<boolean[]>([]);
   const [activity, setActivity] = useState<Pair<BandActivity | null>>(pair(null));
@@ -305,26 +310,51 @@ export default function App() {
     [effectiveScope, regions, selectionReports, reports],
   );
 
-  // A fresh set of suggestions starts with every move switched on.
+  // Stereo moves, then the width change and side moves; a fresh set starts with all switched on.
+  const eqMoves = useMemo(() => movesOf(eq), [eq]);
   useEffect(() => {
-    setEqActive(eq ? eq.suggestions.map(() => true) : []);
-  }, [eq]);
+    setEqActive(eqMoves.map(() => true));
+  }, [eqMoves]);
 
-  const chosenEq = useMemo<EqFilter[]>(
-    () => (eq ? eq.suggestions.filter((_, i) => eqActive[i] ?? true) : []),
-    [eq, eqActive],
-  );
-  const eqOn = eqAudition && chosenEq.length > 0 && !!tracks[0];
+  const chosenEq = useMemo<EqFilter[]>(() => eqMoves.filter((_, i) => eqActive[i] ?? true), [eqMoves, eqActive]);
+  const eqAvailable = !!tracks[0] && (auditionKind === "moves" ? chosenEq.length > 0 : !!eq);
+  const eqOn = eqAudition && eqAvailable;
+  const movesOn = eqOn && auditionKind === "moves";
+  const fullWanted = eqOn && auditionKind === "full";
+  const fullOn = fullWanted && !!eq && fullRendered === eq;
 
   // Compensate the EQ's loudness change, so switching it on doesn't just sound louder.
   const eqCompensation = useMemo(() => {
     const a = shown[0];
-    return eqOn && a ? -loudnessChange(a.spectrum.freqs, a.spectrum.level, chosenEq) : 0;
-  }, [eqOn, shown[0], chosenEq]);
+    if (!a) return 0;
+    if (movesOn) {
+      const { mid, side } = midSideCurves(chosenEq, a.spectrum.freqs);
+      return -loudnessChange(a.spectrum, mid, side);
+    }
+    return fullOn && eq ? -loudnessChange(a.spectrum, eq.full.mid, eq.full.side) : 0;
+  }, [movesOn, fullOn, shown[0], chosenEq, eq]);
 
   useEffect(() => {
-    if (tracks[0]) api.setEq(0, chosenEq, eqOn);
-  }, [chosenEq, eqOn, tracks[0]]);
+    if (tracks[0]) api.setEq(0, chosenEq, movesOn);
+  }, [chosenEq, movesOn, tracks[0]]);
+
+  // The full match plays from a rendering of A through its curves, made when first asked for
+  // and again whenever the match changes while it's wanted; until then A plays as it is.
+  useEffect(() => {
+    if (!fullWanted || !eq || fullRendered === eq) return;
+    let cancelled = false;
+    api
+      .renderFullMatch(0, { mid: eq.full.mid, side: eq.full.side })
+      .then((done) => !cancelled && done && setFullRendered(eq))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [fullWanted, eq, fullRendered]);
+
+  useEffect(() => {
+    if (tracks[0]) api.setFullMatch(0, fullOn);
+  }, [fullOn, tracks[0]]);
 
   // Loudness matching turns the louder track down to the quieter one; EQ compensation is added on
   // top. Never boost (if a trim would be positive, both come down instead), so playback can't
@@ -363,10 +393,11 @@ export default function App() {
 
   const eqPassages = useMemo(() => {
     const [a, b] = activity;
-    return eq?.suggestions.map((f) => (a && b ? passageFor(f, a, b) : null)) ?? [];
-  }, [eq, activity]);
+    return eqMoves.map((f) => (a && b && !isWidth(f) ? passageFor(f, a, b) : null));
+  }, [eqMoves, activity]);
 
   // EQ match: moves on A towards B, for whatever is being measured (full tracks or selections).
+  // Runs once both are measured, so it follows the same ranges as the tables.
   useEffect(() => {
     const [a, b] = shown;
     if (!a || !b) {
@@ -374,14 +405,16 @@ export default function App() {
       return;
     }
     let cancelled = false;
+    const ranges = SLOTS.map((s) => (useSelection(s) ? regions[s] : null)) as Pair<Region | null>;
     api
-      .suggestEq(a.spectrum.level, b.spectrum.level)
+      .matchEq(ranges, eqLoudest)
       .then((r) => !cancelled && setEq(r))
       .catch(() => !cancelled && setEq(null));
     return () => {
       cancelled = true;
     };
-  }, [shown[0], shown[1]]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown[0], shown[1], eqLoudest]);
 
   const exportReport = async () => {
     const path = await save({
@@ -392,7 +425,7 @@ export default function App() {
       ],
     });
     if (!path) return;
-    const input = { tracks, reports: shown, scope: effectiveScope, regions, eq };
+    const input = { tracks, reports: shown, scope: effectiveScope, regions, eq, loudest: eqLoudest };
     const contents = path.toLowerCase().endsWith(".json") ? reportJson(input) : reportMarkdown(input);
     try {
       await api.writeTextFile(path, contents);
@@ -733,6 +766,12 @@ export default function App() {
           hasSelection={hasSelection}
           regions={regions}
           eq={eq}
+          eqMoves={eqMoves}
+          eqLoudest={eqLoudest}
+          onEqLoudest={setEqLoudest}
+          auditionKind={auditionKind}
+          onAuditionKind={setAuditionKind}
+          fullRendering={fullWanted && !fullOn}
           paths={[tracks[0]?.path ?? null, tracks[1]?.path ?? null]}
           library={library}
           eqActive={eqActive}
@@ -773,7 +812,7 @@ export default function App() {
         display={display}
         onDisplay={setDisplay}
         eqOn={eqOn}
-        eqAvailable={chosenEq.length > 0 && !!tracks[0]}
+        eqAvailable={eqAvailable}
         onToggleEq={() => setEqAudition((v) => !v)}
         volumeDb={volumeDb}
         onVolume={setVolumeDb}
@@ -781,7 +820,7 @@ export default function App() {
 
       <p className="hints">
         Space play · Tab or 1/2 A/B · ←/→ ±5 s · drag to select, double-click/Esc clears · wheel or
-        pinch to zoom, Shift+wheel to pan · +/− zoom · 0 fit · L loop · K link · M match · E EQ · C curve · S
+        pinch to zoom, Shift+wheel to pan · +/− zoom · 0 fit · L loop · K link · M loudness match · E EQ · C curve · S
         spectrogram · click a section to select it, Shift+click to extend
       </p>
     </div>

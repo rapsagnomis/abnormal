@@ -12,6 +12,9 @@ const FFT_SIZE: usize = 16384;
 const HOP: usize = FFT_SIZE / 2;
 /// Frames this far below the average frame level are skipped (silence, fade tails).
 const FRAME_GATE_DB: f64 = -20.0;
+/// "Loudest parts" gating, as in Matchering: the range is cut into equal pieces of at most this
+/// many seconds, and only pieces whose mid power is at least the mean over all pieces are used.
+const LOUDEST_PIECE_SECONDS: f64 = 15.0;
 
 pub const GRID_MIN_HZ: f64 = 20.0;
 pub const GRID_MAX_HZ: f64 = 20000.0;
@@ -81,7 +84,7 @@ pub fn grid() -> Vec<f64> {
 /// `integrated` (LUFS) normalises the levels so tracks of different loudness compare directly.
 pub fn analyze(audio: &AudioData, start: usize, end: usize, integrated: Option<f64>) -> SpectrumReport {
     let freqs = grid();
-    let Some(psd) = average_psd(audio, start, end) else {
+    let Some(psd) = average_psd(audio, start, end, false) else {
         return SpectrumReport {
             level: vec![FLOOR_DB as f32; freqs.len()],
             width: vec![None; freqs.len()],
@@ -141,6 +144,57 @@ pub fn analyze(audio: &AudioData, start: usize, end: usize, integrated: Option<f
         width,
         bands,
     }
+}
+
+/// Mid and side energy per 1/6 octave on the shared grid, dB (not loudness-normalised: only
+/// differences between them, and between tracks after an offset is removed, are meaningful).
+pub struct MidSide {
+    pub mid: Vec<f64>,
+    pub side: Vec<f64>,
+    pub mono: bool,
+}
+
+impl MidSide {
+    /// Combined (mid + side) energy per grid point, dB: the same shape as `SpectrumReport::level`.
+    pub fn total(&self) -> Vec<f64> {
+        self.mid
+            .iter()
+            .zip(&self.side)
+            .map(|(m, s)| db(10f64.powf(m / 10.0) + 10f64.powf(s / 10.0)).max(FLOOR_DB))
+            .collect()
+    }
+}
+
+/// Mid and side spectra of a range for EQ matching; `loudest` restricts them to its loudest parts.
+pub fn mid_side(audio: &AudioData, start: usize, end: usize, loudest: bool) -> Option<MidSide> {
+    let psd = average_psd(audio, start, end, loudest)?;
+    let on_grid = |p: &[f64]| -> Vec<f64> {
+        grid()
+            .iter()
+            .map(|&f| {
+                let (lo, hi) = smoothing_band(f);
+                db(band_energy(p, psd.bin_hz, lo, hi)).max(FLOOR_DB)
+            })
+            .collect()
+    };
+    Some(MidSide { mid: on_grid(&psd.mid), side: on_grid(&psd.side), mono: audio.channels.len() == 1 })
+}
+
+/// Piece length in samples, and per piece whether it is one of the loudest.
+fn loudest_pieces(left: &[f32], right: &[f32], sample_rate: u32) -> (usize, Vec<bool>) {
+    let len = left.len();
+    let max_piece = (LOUDEST_PIECE_SECONDS * sample_rate as f64) as usize;
+    let pieces = len / max_piece.max(1) + 1;
+    let size = (len / pieces).max(1);
+    let powers: Vec<f64> = (0..pieces)
+        .map(|p| {
+            let (s, e) = (p * size, ((p + 1) * size).min(len));
+            let sum: f64 = left[s..e].iter().zip(&right[s..e]).map(|(&l, &r)| ((l + r) as f64 * 0.5).powi(2)).sum();
+            sum / (e - s).max(1) as f64
+        })
+        .collect();
+    let mean = powers.iter().sum::<f64>() / pieces as f64;
+    (size, powers.iter().map(|&p| p >= mean).collect())
 }
 
 fn width_db(mid: f64, side: f64) -> Option<f64> {
@@ -210,8 +264,9 @@ fn tilt(freqs: &[f64], level: &[f32]) -> Option<f64> {
     (sxx > 0.0).then(|| sxy / sxx)
 }
 
-/// Welch-averaged mid and side power spectra over the gated frames of the range.
-fn average_psd(audio: &AudioData, start: usize, end: usize) -> Option<Psd> {
+/// Welch-averaged mid and side power spectra over the gated frames of the range; with `loudest`,
+/// only frames centred in the loudest pieces (`loudest_pieces`) count.
+fn average_psd(audio: &AudioData, start: usize, end: usize, loudest: bool) -> Option<Psd> {
     let end = end.min(audio.frames());
     let start = start.min(end);
     let left = &audio.channels[0][start..end];
@@ -244,6 +299,7 @@ fn average_psd(audio: &AudioData, start: usize, end: usize) -> Option<Psd> {
         return None;
     }
     let gate = mean * 10f64.powf(FRAME_GATE_DB / 10.0);
+    let in_loudest = loudest.then(|| loudest_pieces(left, right, audio.sample_rate));
 
     // Pass 2: FFT the frames that pass the gate.
     let mut planner = RealFftPlanner::<f32>::new();
@@ -261,6 +317,11 @@ fn average_psd(audio: &AudioData, start: usize, end: usize) -> Option<Psd> {
     for (&s, &level) in frame_starts.iter().zip(&levels) {
         if level < gate {
             continue;
+        }
+        if let Some((size, keep)) = &in_loudest {
+            if !keep[((s + frame_len(s) / 2) / size).min(keep.len() - 1)] {
+                continue;
+            }
         }
         let n = frame_len(s);
         in_l.fill(0.0);

@@ -1002,8 +1002,20 @@ kbd {
 }
 .eq-audition {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+}
+.eq-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.eq-option input {
+  margin: 0;
+  accent-color: #5b8def;
 }
 .eq-audition .chart-note {
   margin: 0;

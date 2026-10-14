@@ -10,7 +10,7 @@ import type { EqFilter } from "./api";
  *   Gain       dB
  *   Q          normalised on a log scale over Pro-Q's 0.025–40, so Q 1 = 0.5
  *   Shape      0 Bell, 1 Low Shelf, 2 Low Cut, 3 High Shelf, 4 High Cut, 5 Notch, …
- *   Stereo Placement 2 = stereo
+ *   Stereo Placement 0 Left, 1 Right, 2 Stereo, 3 Mid, 4 Side
  */
 
 const BANDS = 24;
@@ -18,6 +18,7 @@ const Q_MIN = 0.025;
 const Q_MAX = 40;
 
 const SHAPE: Record<EqFilter["kind"], number> = { peak: 0, lowShelf: 1, highShelf: 3 };
+const PLACEMENT = { stereo: 2, side: 4 } as const;
 
 export const proQFrequency = (hz: number) => Math.log2(hz);
 export const proQQ = (q: number) => Math.log(Math.min(Q_MAX, Math.max(Q_MIN, q)) / Q_MIN) / Math.log(Q_MAX / Q_MIN);
@@ -115,7 +116,7 @@ export function proQPreset(filters: EqFilter[], name: string, description: strin
     band("Q", proQQ(f.q));
     band("Shape", SHAPE[f.kind]);
     band("Slope", 2);
-    band("Stereo Placement", 2);
+    band("Stereo Placement", PLACEMENT[f.placement ?? "stereo"]);
     band("Speakers", 1);
     // A static EQ: no dynamics or spectral processing, whatever the template's band had.
     band("Dynamic Range", 0);

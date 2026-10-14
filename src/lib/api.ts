@@ -257,12 +257,16 @@ export interface DownloadItem {
 export type MatchWeights = [number, number, number];
 
 export type FilterKind = "peak" | "lowShelf" | "highShelf";
+/** What a move acts on: both channels alike, or only the side (L − R). */
+export type Placement = "stereo" | "side";
 
 export interface EqFilter {
   kind: FilterKind;
   freq: number;
   gain: number;
   q: number;
+  /** Absent means stereo. */
+  placement?: Placement;
 }
 
 export interface EqReport {
@@ -275,6 +279,36 @@ export interface EqReport {
   offset: number;
   errorBefore: number;
   errorAfter: number;
+}
+
+/** What is left of the side's difference after the stereo moves (see `eq.rs`). */
+export interface SideReport {
+  /** Broadband side change (wider/narrower overall), as a side high shelf at 10 Hz. */
+  width: EqFilter | null;
+  /** Side-only moves, largest effect first. */
+  suggestions: EqFilter[];
+  /** What A's side needs (B − A side, smoothed, same offset removed), dB per grid point. */
+  target: (number | null)[];
+  /** Weighted RMS of the side target left after the stereo moves, and after the side moves too. */
+  errorBefore: number;
+  errorAfter: number;
+}
+
+/** Matchering-style correction: the smoothed difference itself, not reduced to moves. */
+export interface FullMatch {
+  /** dB per grid point, for the combined signal, mid and side. */
+  total: number[];
+  mid: number[];
+  side: number[];
+  /** Weighted RMS between the full match and the moves, dB (total, and side). */
+  gap: number;
+  sideGap: number | null;
+}
+
+export interface MatchReport extends EqReport {
+  /** Null when either track is mono. */
+  side: SideReport | null;
+  full: FullMatch;
 }
 
 /** A detected song section; sections with the same label sound alike. */
@@ -337,12 +371,16 @@ export const api = {
   sections: (slot: Slot) => invoke<Section[]>("sections", { slot }),
   bandActivity: (slot: Slot, region: Region | null) =>
     invoke<BandActivity>("band_activity", { slot, range: region ? [region.start, region.end] : null }),
-  suggestEq: (track: number[], reference: number[]) => invoke<EqReport>("suggest_eq", { track, reference }),
+  /** EQ match of A towards B over each track's range (null = whole track). */
+  matchEq: (ranges: [Region | null, Region | null], loudest: boolean) =>
+    invoke<MatchReport>("match_eq", { ranges: ranges.map((r) => (r ? [r.start, r.end] : null)), loudest }),
+  /** Render A's playback through full-match curves (null drops it); false if overtaken. */
+  renderFullMatch: (slot: Slot, curves: { mid: number[]; side: number[] } | null) =>
+    invoke<boolean>("render_full_match", { slot, curves }),
+  setFullMatch: (slot: Slot, enabled: boolean) => invoke<void>("set_full_match", { slot, enabled }),
   writeTextFile: (path: string, contents: string) => invoke<void>("write_text_file", { path, contents }),
   /** The user's Pro-Q 4 "Default Setting" preset text, if any. */
   proQTemplate: () => invoke<string | null>("pro_q_template"),
-  /** Save a Pro-Q 4 preset into its preset folder; returns the file's path. */
-  saveProQPreset: (name: string, contents: string) => invoke<string>("save_pro_q_preset", { name, contents }),
   libraryStatus: () => invoke<LibraryStatus>("library_status"),
   rescanLibrary: () => invoke<void>("rescan_library"),
   similarTracks: (features: Features, exclude: string[], weights: MatchWeights, limit: number) =>

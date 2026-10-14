@@ -100,7 +100,7 @@ export function TransportBar(p: Props) {
           onClick={p.onToggleMatch}
           title={`Match loudness (M): turn the louder track down to the quieter one, based on ${p.matchBasis}`}
         >
-          Match
+          Loudness Match
         </button>
         <button
           className={`toggle${p.eqOn ? " on" : ""}`}

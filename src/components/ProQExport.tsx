@@ -10,7 +10,7 @@ const proQTemplate = () => (template ??= api.proQTemplate().catch(() => null));
 
 const FEEDBACK_MS = 4000;
 
-/** Copy the chosen EQ moves as a Pro-Q 4 preset, or save it into Pro-Q's preset browser. */
+/** Copy the chosen EQ moves as a Pro-Q 4 preset, to paste into Pro-Q 4. */
 export function ProQExport({ filters, names }: { filters: EqFilter[]; names: [string | null, string | null] }) {
   const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null);
   useEffect(() => {
@@ -36,23 +36,12 @@ export function ProQExport({ filters, names }: { filters: EqFilter[]; names: [st
       setStatus({ text: `Could not copy: ${e}`, error: true });
     }
   };
-  const save = async () => {
-    try {
-      await api.saveProQPreset(name, await preset());
-      setStatus({ text: "Saved: Pro-Q 4 presets ▸ abnormal" });
-    } catch (e) {
-      setStatus({ text: String(e), error: true });
-    }
-  };
 
   const disabled = filters.length === 0;
   return (
     <div className="proq-export">
       <button onClick={copy} disabled={disabled} title="Copy the switched-on moves as a FabFilter Pro-Q 4 preset: paste it into Pro-Q 4 from its instance menu">
         Copy for Pro-Q 4
-      </button>
-      <button onClick={save} disabled={disabled} title="Save the switched-on moves as a preset in Pro-Q 4's preset browser, in the abnormal folder">
-        Save to Pro-Q 4
       </button>
       {status && <span className={`chart-note${status.error ? " library-error" : ""}`}>{status.text}</span>}
     </div>

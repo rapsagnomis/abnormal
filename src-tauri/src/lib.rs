@@ -1,8 +1,10 @@
+mod accent;
 mod activity;
 mod decode;
 mod deemix;
 mod dynamics;
 mod eq;
+mod export;
 mod fir;
 mod library;
 mod loudness;
@@ -68,6 +70,10 @@ struct TrackInfo {
     /// Title, artist, album, cover from the file's tags.
     #[serde(flatten)]
     meta: library::TrackMeta,
+    /// The cover's colour ("#rrggbb"), for the lane; none without a colourful cover.
+    accent: Option<String>,
+    /// The cover's one or two dominant colours, for the song-part palette; empty without.
+    palette: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -128,6 +134,13 @@ async fn load_track(
             duration: audio.duration(),
             peaks: peaks::compute_peaks(&audio, PEAK_BUCKETS),
             meta: library.track_meta(&path_buf),
+            accent: None,
+            palette: Vec::new(),
+        };
+        let colors = info.meta.cover.as_deref().and_then(|c| accent::cover_colors(std::path::Path::new(c)));
+        let info = match colors {
+            Some(c) => TrackInfo { accent: Some(c.accent), palette: c.palette, ..info },
+            None => info,
         };
         tracks.lock().unwrap()[slot] = Some(Arc::new(audio));
         Ok(info)
@@ -211,17 +224,27 @@ async fn range_peaks(
     .await
 }
 
-/// EQ match of A towards B over each track's range (`None` = whole track): stereo moves, side
-/// (width) moves and the full Matchering-style curves. `loudest` measures only the louder parts.
+/// The compared pair's audio: the track and the reference, by slot.
+fn pair_audio(state: &AppState, slots: [usize; 2]) -> Result<[Option<Arc<AudioData>>; 2], String> {
+    for slot in slots {
+        check_slot(slot)?;
+    }
+    let tracks = state.tracks.lock().unwrap();
+    Ok(slots.map(|s| tracks[s].clone()))
+}
+
+/// EQ match of the track in `slots[0]` towards the reference in `slots[1]` over each one's range
+/// (`None` = whole track): stereo moves, side (width) moves and the full Matchering-style curves.
+/// `loudest` measures only the louder parts.
 #[tauri::command]
 async fn match_eq(
-    ranges: [Option<(f64, f64)>; SLOTS],
+    slots: [usize; 2],
+    ranges: [Option<(f64, f64)>; 2],
     loudest: bool,
     state: State<'_, AppState>,
 ) -> Result<eq::MatchReport, String> {
-    let [a, b] = state.tracks.lock().unwrap().clone();
-    let (Some(a), Some(b)) = (a, b) else {
-        return Err("load a track in A and a reference in B".into());
+    let [Some(a), Some(b)] = pair_audio(&state, slots)? else {
+        return Err("load a track and a reference to compare it with".into());
     };
     tauri::async_runtime::spawn_blocking(move || {
         let mid_side = |audio: &AudioData, range| {
@@ -232,6 +255,19 @@ async fn match_eq(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// What's playing right now on a track, for the live analyser: the spectrum of the ~0.4 s up to
+/// `seconds`, on the shared grid and normalised by `integrated` (the track's loudness, LUFS) like
+/// the long-term spectrum, so the two overlay. `None` when that stretch is silent.
+#[tauri::command]
+async fn live_spectrum(
+    slot: usize,
+    seconds: f64,
+    integrated: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<Option<Vec<f32>>, String> {
+    with_audio(&state, slot, move |audio| Ok(spectrum::live(audio, seconds, integrated))).await
 }
 
 /// Spectrogram of a time range as `rows × columns` bytes (row 0 = highest frequency), sent as a
@@ -308,6 +344,35 @@ fn set_full_match(slot: usize, enabled: bool, state: State<'_, AppState>) -> Res
     check_slot(slot)?;
     state.player.set_alt_enabled(slot, enabled);
     Ok(())
+}
+
+/// Write the track in `slots[0]` to `path` as WAV with its EQ match (`eq`) and/or loudness
+/// matched to the reference in `slots[1]`, levels measured over each one's range (`None` =
+/// whole track), as for the match itself.
+#[tauri::command]
+async fn export_track(
+    path: String,
+    slots: [usize; 2],
+    eq: Option<export::ExportEq>,
+    match_loudness: bool,
+    ranges: [Option<(f64, f64)>; 2],
+    float: bool,
+    state: State<'_, AppState>,
+) -> Result<export::Exported, String> {
+    let [a, b] = pair_audio(&state, slots)?;
+    let a = a.ok_or("load a track to export")?;
+    let b = match (match_loudness, b) {
+        (false, _) => None,
+        (true, Some(b)) => Some(b),
+        (true, None) => return Err("load a reference to match its loudness".into()),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let reference = b.as_deref().map(|b| (b, to_frame_range(b, ranges[1])));
+        export::export(&PathBuf::from(path), &a, to_frame_range(&a, ranges[0]), eq.as_ref(), reference, float)
+            .map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Pro-Q 4's user preset folder, relative to the home directory.
@@ -559,9 +624,12 @@ fn set_loop(slot: usize, region: Option<(f64, f64)>, state: State<'_, AppState>)
     Ok(())
 }
 
+/// Loop a track's selection (or stop looping it).
 #[tauri::command]
-fn set_loop_enabled(enabled: bool, state: State<'_, AppState>) {
-    state.player.set_loop_enabled(enabled);
+fn set_loop_enabled(slot: usize, enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
+    check_slot(slot)?;
+    state.player.set_loop_enabled(slot, enabled);
+    Ok(())
 }
 
 #[tauri::command]
@@ -583,7 +651,7 @@ pub fn run() {
         .manage(AppState {
             player,
             audio_error,
-            tracks: Arc::new(Mutex::new([None, None])),
+            tracks: Arc::new(Mutex::new(Default::default())),
             opened: Mutex::new(Vec::new()),
         })
         .setup(|app| {
@@ -617,7 +685,9 @@ pub fn run() {
             match_eq,
             render_full_match,
             set_full_match,
+            export_track,
             spectrogram,
+            live_spectrum,
             sections,
             band_activity,
             pro_q_template,

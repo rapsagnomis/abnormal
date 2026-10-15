@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 180 180">
+  <!-- (a/b)normal app icon: the waveform as rounded bars (mint) with the playhead as one taller,
+       wider bar (coral); its neighbours rise towards it, like the playhead light in the app.
+       Two colours on the dark background. Placed on the macOS grid in src-tauri/icons/icon.svg. -->
+  <rect id="background" width="180" height="180" rx="40" fill="#16191e"/>
+  <g id="waveform" fill="#5fd6c4">
+    <rect x="21"  y="73" width="10" height="34" rx="5"/>
+    <rect x="37"  y="61" width="10" height="58" rx="5"/>
+    <rect x="53"  y="68" width="10" height="44" rx="5"/>
+    <rect x="69"  y="47" width="10" height="86" rx="5"/>
+    <rect x="85"  y="40" width="10" height="100" rx="5"/>
+    <rect x="117" y="42" width="10" height="96" rx="5"/>
+    <rect x="133" y="62" width="10" height="56" rx="5"/>
+    <rect x="149" y="71" width="10" height="38" rx="5"/>
+  </g>
+  <rect id="playhead" x="99" y="28" width="14" height="124" rx="7" fill="#ff7a6b"/>
+</svg>

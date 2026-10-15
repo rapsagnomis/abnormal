@@ -1,12 +1,21 @@
-import type { AnalysisReport, EqFilter, LibraryStatus, MatchReport, Region, Slot, SongStructure, StructureSetup } from "../lib/api";
+import { useEffect, useRef } from "react";
+import { Glide } from "./Glide";
+import type { ABSlot, AnalysisReport, EqFilter, LibraryStatus, MatchReport, Region, SongStructure, StructureSetup } from "../lib/api";
 import { curveOf, describe, formatGain, formatHz, isSide, isWidth, midSideCurves, typeLabel } from "../lib/eq";
 import { formatTime } from "../lib/format";
+import { FADE_IN, flash } from "../lib/motion";
+import { pairColors, PairContext, usePair } from "../lib/pair";
+import type { ComparedPair } from "../lib/pair";
 import { fmt, SECTIONS, showValue } from "../lib/metrics";
 import type { Section, Tab } from "../lib/metrics";
 import { FrequencyChart } from "./FrequencyChart";
+import { HeadlineCards } from "./HeadlineCards";
+import { TweenedValue } from "./TweenedValue";
 import { Goniometer } from "./Goniometer";
 import { HistogramChart } from "./HistogramChart";
 import { LibraryView } from "./LibraryView";
+import { LoadNewContext } from "./LoadButtons";
+import type { LoadNew } from "./LoadButtons";
 import { PartsTable } from "./PartsTable";
 import { ProQExport } from "./ProQExport";
 
@@ -25,6 +34,8 @@ const TABS: [Tab, string][] = [
 
 interface Props {
   tab: Tab;
+  /** The two tracks compared; `reports` and every other pair below are in this order. */
+  pair: ComparedPair;
   reports: [AnalysisReport | null, AnalysisReport | null];
   /** Per-track "is this still being measured" flags. */
   pending: [boolean, boolean];
@@ -41,44 +52,60 @@ interface Props {
   onEqLoudest: (on: boolean) => void;
   auditionKind: AuditionKind;
   onAuditionKind: (kind: AuditionKind) => void;
-  /** The full match is wanted but A's rendering isn't ready yet. */
+  /** The full match is wanted but the track's rendering isn't ready yet. */
   fullRendering: boolean;
   /** Paths of the loaded tracks. */
   paths: [string | null, string | null];
   library: LibraryStatus | null;
   /** Which suggested EQ moves are switched on (index-aligned with `eqMoves`). */
   eqActive: boolean[];
-  /** Suggested EQ is being auditioned on A's playback. */
+  /** Suggested EQ is being auditioned on the track's playback. */
   eqAudition: boolean;
-  /** Level compensation applied to A while auditioning, dB. */
+  /** Level compensation applied to the track while auditioning, dB. */
   eqCompensation: number;
-  /** Per suggested move: the passage of A where it matters most (null = none / still measuring). */
+  /** Per suggested move: the passage of the track where it matters most (null = none / still measuring). */
   eqPassages: (Region | null)[];
   onTab: (tab: Tab) => void;
   onEqActive: (index: number, on: boolean) => void;
   onEqAudition: (on: boolean) => void;
   onListen: (region: Region) => void;
   onScope: (scope: Scope) => void;
-  onLoad: (slot: Slot, path: string) => void;
+  /** Load into the track (0) or the reference (1). */
+  onLoad: (side: ABSlot, path: string) => void;
   onRescan: () => void;
   /** Whole-track reports, whatever is being measured. */
   fullReports: [AnalysisReport | null, AnalysisReport | null];
   structures: [SongStructure | null, SongStructure | null];
   structurePending: [boolean, boolean];
   structureSetup: StructureSetup | null;
+  /** Load a library or Deezer track into a new/empty lane. */
+  loadNew: LoadNew;
+  /** What's playing right now (the track listened to), for the live curve on the spectrum chart. */
+  live: { label: string; values: number[] } | null;
   onStructureInstall: () => void;
 }
 
 
+/** Inside the panel, --a/--b and --series-a/-b are the pair's lane colours (set on the panel). */
 const SERIES_COLORS = ["var(--series-a)", "var(--series-b)"];
-const label = (i: number) => (i ? "B" : "A");
 
 export function AnalysisPanel(p: Props) {
   const [ra, rb] = p.reports;
+  // Another pair now fills the same tables and charts: fade them back in so the switch registers.
+  const panel = useRef<HTMLElement>(null);
+  const pairKey = p.pair.slots.join();
+  const firstPair = useRef(pairKey);
+  useEffect(() => {
+    if (pairKey !== firstPair.current) flash(panel.current, FADE_IN, 240);
+    firstPair.current = pairKey;
+  }, [pairKey]);
   const freqs = (ra ?? rb)?.spectrum.freqs ?? [];
+  const label = (i: number) => p.pair.labels[i];
 
   return (
-    <aside className="panel">
+    <PairContext.Provider value={p.pair}>
+    <LoadNewContext.Provider value={p.loadNew}>
+    <aside className="panel" ref={panel} style={pairColors(p.pair.labels)}>
       <div className="tabs" role="tablist">
         {TABS.map(([t, name]) => (
           <button key={t} role="tab" aria-selected={p.tab === t} className={p.tab === t ? "on" : ""} onClick={() => p.onTab(t)}>
@@ -89,6 +116,7 @@ export function AnalysisPanel(p: Props) {
       <header className="panel-header">
         <span className="scope-label">Measure</span>
         <div className="segmented" role="radiogroup" aria-label="Measure">
+          <Glide />
           <button className={p.scope === "full" ? "on" : ""} onClick={() => p.onScope("full")}>
             Full
           </button>
@@ -113,10 +141,15 @@ export function AnalysisPanel(p: Props) {
         </p>
       )}
 
+      {/* Each tab's content fades in when switching to it. */}
+      <div key={p.tab} className="tab-body fade-in">
       {p.tab === "library" ? (
         <LibraryView reports={p.reports} paths={p.paths} status={p.library} onLoad={p.onLoad} onRescan={p.onRescan} />
       ) : (
-        <MetricsTable sections={SECTIONS[p.tab]} {...p} />
+        <>
+          <HeadlineCards tab={p.tab} reports={p.reports} pending={p.pending} loaded={p.loaded} />
+          <MetricsTable sections={SECTIONS[p.tab]} {...p} />
+        </>
       )}
 
       {p.tab === "dynamics" && (
@@ -165,10 +198,15 @@ export function AnalysisPanel(p: Props) {
             unit="dB"
             freqs={freqs}
             minSpan={24}
-            series={p.reports.map((r, i) => ({ label: label(i), color: SERIES_COLORS[i], values: r?.spectrum.level ?? null }))}
+            series={[
+              ...p.reports.map((r, i) => ({ label: label(i), color: SERIES_COLORS[i], values: r?.spectrum.level ?? null })),
+              ...(p.live
+                ? [{ label: `Live · ${p.live.label}`, color: `var(--lane-${p.live.label.toLowerCase()})`, values: p.live.values, live: true }]
+                : []),
+            ]}
           />
           <FrequencyChart
-            title="Difference A − B · dB"
+            title={`Difference ${label(0)} − ${label(1)} · dB`}
             unit="dB"
             freqs={freqs}
             minSpan={6}
@@ -177,13 +215,15 @@ export function AnalysisPanel(p: Props) {
             height={110}
             series={[
               {
-                label: "A − B",
+                label: `${label(0)} − ${label(1)}`,
                 color: "var(--series-diff)",
                 values: ra && rb ? ra.spectrum.level.map((v, i) => v - rb.spectrum.level[i]) : null,
               },
             ]}
           />
-          <p className="chart-note">Positive: A has more energy there than B at equal loudness.</p>
+          <p className="chart-note">
+            Positive: {label(0)} has more energy there than {label(1)} at equal loudness.
+          </p>
           <section className="panel-section">
             <h3 className="results-heading">EQ match</h3>
             <EqView
@@ -237,19 +277,23 @@ export function AnalysisPanel(p: Props) {
           </div>
         </>
       )}
+      </div>
     </aside>
+    </LoadNewContext.Provider>
+    </PairContext.Provider>
   );
 }
 
 function MetricsTable({ sections, reports, pending, loaded }: { sections: Section[] } & Props) {
+  const { labels } = usePair();
   return (
     <table className="metrics">
       <thead>
         <tr>
           <th />
-          <th className="col-a">A</th>
-          <th className="col-b">B</th>
-          <th title="A − B">Δ</th>
+          <th className="col-a">{labels[0]}</th>
+          <th className="col-b">{labels[1]}</th>
+          <th title={`${labels[0]} − ${labels[1]}`}>Δ</th>
         </tr>
       </thead>
       {sections.map((section, si) => (
@@ -272,7 +316,7 @@ function MetricsTable({ sections, reports, pending, loaded }: { sections: Sectio
                   const warning = v !== null && row.warn ? row.warn(v) : null;
                   return (
                     <td key={i} className={`${pending[i] ? "pending" : ""}${warning ? " warn" : ""}`} title={warning ?? undefined}>
-                      {loaded[i] ? showValue(row, v) : ""}
+                      {loaded[i] ? <TweenedValue value={v} show={(x) => showValue(row, x)} /> : ""}
                     </td>
                   );
                 })}
@@ -303,14 +347,17 @@ interface EqViewProps {
   rendering: boolean;
   passages: (Region | null)[];
   onListen: (region: Region) => void;
-  /** File names of A and B, for the exported preset's name. */
+  /** File names of the track and the reference, for the exported preset's name. */
   names: [string | null, string | null];
 }
 
 function EqView(p: EqViewProps) {
   const { eq, moves, freqs, active, audition, kind } = p;
+  const {
+    labels: [a, b],
+  } = usePair();
   if (!p.hasBoth) {
-    return <p className="chart-note">Load a track in A and a reference in B to get EQ suggestions.</p>;
+    return <p className="chart-note">Load a track and a reference to get EQ suggestions.</p>;
   }
   const loudestToggle = (
     <label className="eq-option" title="Measure both tracks only over their louder-than-average stretches (as Matchering does), so quiet intros and breakdowns don't sway the match">
@@ -321,7 +368,7 @@ function EqView(p: EqViewProps) {
     return (
       <>
         {loudestToggle}
-        <p className="chart-note">Fitting…</p>
+        <p className="chart-note working">Fitting…</p>
       </>
     );
   }
@@ -330,7 +377,7 @@ function EqView(p: EqViewProps) {
   return (
     <>
       <p className="chart-note">
-        Moves on <span className="col-a">A</span> to approach the tonal balance of <span className="col-b">B</span>, compared at
+        Moves on <span className="col-a">{a}</span> to approach the tonal balance of <span className="col-b">{b}</span>, compared at
         equal loudness. A level difference of {formatGain(eq.offset)} is left to loudness matching.
         {eq.side && " Side moves act on the stereo difference (L − R) only: they make that range wider or narrower."}
       </p>
@@ -373,7 +420,7 @@ function EqView(p: EqViewProps) {
                     <button
                       className="listen"
                       onClick={() => p.onListen(p.passages[i]!)}
-                      title={`Loop A at ${formatTime(p.passages[i]!.start)}–${formatTime(p.passages[i]!.end)}, where this move matters most`}
+                      title={`Loop ${a} at ${formatTime(p.passages[i]!.start)}–${formatTime(p.passages[i]!.end)}, where this move matters most`}
                     >
                       ▶
                     </button>
@@ -399,7 +446,7 @@ function EqView(p: EqViewProps) {
         zeroLine
         symmetric
         series={[
-          { label: "Needed (B − A)", color: "var(--series-b)", values: eq.target, dashed: true },
+          { label: `Needed (${b} − ${a})`, color: "var(--series-b)", values: eq.target, dashed: true },
           { label: "Full match", color: "var(--series-diff)", values: eq.full.total },
           { label: "Suggested EQ", color: "var(--series-a)", values: curveOf(chosen.filter((f) => !isSide(f)), freqs) },
         ]}
@@ -434,33 +481,35 @@ function EqView(p: EqViewProps) {
           className={`toggle${audition ? " on" : ""}`}
           onClick={() => p.onAudition(!audition)}
           disabled={kind === "moves" && chosen.length === 0}
-          title="Hear the EQ on A's playback (E)"
+          title={`Hear the EQ on ${a}'s playback (E)`}
         >
-          {audition ? "Auditioning on A" : "Audition on A"}
+          {audition ? `Auditioning on ${a}` : `Audition on ${a}`}
         </button>
         <div className="segmented" role="radiogroup" aria-label="Audition">
+          <Glide />
           <button className={kind === "moves" ? "on" : ""} onClick={() => p.onKind("moves")} title="The switched-on moves above">
             Moves
           </button>
           <button
             className={kind === "full" ? "on" : ""}
             onClick={() => p.onKind("full")}
-            title="The full match: A through linear-phase mid and side filters that follow the full-match curves"
+            title={`The full match: ${a} through linear-phase mid and side filters that follow the full-match curves`}
           >
             Full match
           </button>
         </div>
-        <span className="chart-note">
+        <span className={`chart-note${audition && p.rendering ? " working" : ""}`}>
           {audition
             ? p.rendering
               ? "Rendering the full match…"
-              : `Level-compensated by ${formatGain(p.compensation)} so the EQ doesn't just sound louder. Switch A/B, or press E to compare with and without.`
+              : `Level-compensated by ${formatGain(p.compensation)} so the EQ doesn't just sound louder. Switch tracks, or press E to compare with and without.`
             : kind === "moves"
-              ? "Play A with the selected moves applied."
-              : "Play A through the full match, to hear what the moves leave out."}
+              ? `Play ${a} with the selected moves applied.`
+              : `Play ${a} through the full match, to hear what the moves leave out.`}
         </span>
       </div>
     </>
   );
 }
+
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { mixCurve, useTween } from "../lib/motion";
 
 export interface FrequencySeries {
   label: string;
@@ -7,6 +8,9 @@ export interface FrequencySeries {
   values: (number | null)[] | null;
   /** Dashed line: a second cue besides colour. */
   dashed?: boolean;
+  /** Changes constantly (the live analyser): drawn lighter and kept out of the y range, so the
+   *  axes stay put while it moves. */
+  live?: boolean;
 }
 
 interface Props {
@@ -42,8 +46,14 @@ export function FrequencyChart({ title, unit, freqs, series, zeroLine, symmetric
     return () => ro.disconnect();
   }, []);
 
-  const present = series.filter((s) => s.values);
-  const all = present.flatMap((s) => s.values!.filter((v, i): v is number => v !== null && freqs[i] >= 30 && freqs[i] <= 18000));
+  // Curves (and with them the y range) glide to new data: another pair, selection or EQ choice.
+  const curves = useTween(
+    series.map((s) => s.values),
+    (from, to, t) => to.map((v, i) => mixCurve(from[i] ?? null, v, t)),
+    280,
+  );
+  const present = series.map((s, i) => ({ ...s, values: curves[i] ?? s.values })).filter((s) => s.values);
+  const all = present.filter((s) => !s.live).flatMap((s) => s.values!.filter((v, i): v is number => v !== null && freqs[i] >= 30 && freqs[i] <= 18000));
 
   const header = (
     <div className="chart-header">
@@ -143,7 +153,8 @@ export function FrequencyChart({ title, unit, freqs, series, zeroLine, symmetric
             d={path(s.values!)}
             fill="none"
             stroke={s.color}
-            strokeWidth={2}
+            strokeWidth={s.live ? 1.5 : 2}
+            strokeOpacity={s.live ? 0.8 : 1}
             strokeDasharray={s.dashed ? "5 4" : undefined}
             strokeLinejoin="round"
             strokeLinecap="round"

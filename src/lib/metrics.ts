@@ -152,8 +152,63 @@ const STEREO: Section[] = [
   },
 ];
 
-/** Metric tables per tab; the EQ and Similar tabs have their own views. */
-export const SECTIONS: Record<Exclude<Tab, "library">, Section[]> = { loudness: LOUDNESS, dynamics: DYNAMICS, tonal: TONAL, stereo: STEREO };
+type MetricTab = Exclude<Tab, "library">;
+const ALL_SECTIONS: Record<MetricTab, Section[]> = { loudness: LOUDNESS, dynamics: DYNAMICS, tonal: TONAL, stereo: STEREO };
+
+/**
+ * Headline cards at the top of a tab: the few numbers that give the overview, each with a short
+ * plain-language explanation shown on hover. A `metric` card shows one table row for both tracks
+ * (big) and their difference, under its own title; the Tonal tab also has a card computed from
+ * the pair itself.
+ */
+export type Headline = { explain: string } & (
+  | { kind: "metric"; title: string; row: Row }
+  /** The band that differs most between the two (from the band levels). */
+  | { kind: "biggestDifference" }
+);
+
+const rowOf = (tab: MetricTab, label: string): Row => {
+  const row = ALL_SECTIONS[tab].flatMap((s) => s.rows).find((r) => r.label === label);
+  if (!row) throw new Error(`no ${tab} row "${label}"`);
+  return row;
+};
+const metric = (tab: MetricTab, label: string, title: string, explain: string): Headline => ({
+  kind: "metric",
+  title,
+  row: rowOf(tab, label),
+  explain,
+});
+
+export const HEADLINES: Record<MetricTab, Headline[]> = {
+  loudness: [
+    metric("loudness", "Integrated", "Integrated", "Average loudness over the whole range, as streaming platforms measure it. Higher is louder."),
+    metric("loudness", "True peak", "True peak", "Highest peak, including between samples. Keep it at −1 dBTP or below so encoding to MP3/AAC doesn't clip."),
+    metric("loudness", "PLR", "PLR", "Peak minus average loudness. Low means dense and heavily limited; high leaves room for transients."),
+  ],
+  dynamics: [
+    metric("dynamics", "PSR median", "PSR median", "How far peaks rise above the loudness, moment to moment (3 s). Below ~8 sounds squashed; higher is punchier."),
+    metric("dynamics", "DR score", "DR", "Peaks against the loudest 20 % of the track. ≤ 6 brickwalled, 7–10 typical modern master, 11+ open and punchy."),
+    metric("dynamics", "Loudness range", "LRA", "How much the loudness moves between quiet and loud sections. 2–5 LU steady (pop, EDM), 10+ very dynamic."),
+  ],
+  tonal: [
+    metric("tonal", "Tilt", "Tilt", "Overall slope of the spectrum; pink noise is 0. More negative sounds darker, closer to 0 brighter."),
+    { kind: "biggestDifference", explain: "The band where the two differ most at equal loudness: the first thing to look at in the EQ match." },
+  ],
+  stereo: [
+    metric("stereo", "Side / mid", "Width", "Side energy against mid. 0 dB is as wide as unrelated left and right; very negative is near mono."),
+    metric("stereo", "Correlation", "Correlation", "How alike left and right are: +1 mono, around 0 very wide, below 0 out of phase."),
+    metric("stereo", "Worst 5%", "Mono safety", "Correlation in the least mono-compatible moments. Below 0, parts cancel when played in mono."),
+  ],
+};
+
+/** Metric tables per tab, below the headlines (which aren't repeated); the Library tab has its own view. */
+export const SECTIONS: Record<MetricTab, Section[]> = Object.fromEntries(
+  (Object.keys(ALL_SECTIONS) as MetricTab[]).map((tab) => {
+    const shown = new Set(HEADLINES[tab].flatMap((h) => (h.kind === "metric" ? [h.row] : [])));
+    const sections = ALL_SECTIONS[tab].map((s) => ({ ...s, rows: s.rows.filter((r) => !shown.has(r)) })).filter((s) => s.rows.length);
+    return [tab, sections];
+  }),
+) as Record<MetricTab, Section[]>;
 
 /** "+1.2", "−", etc. Values in tables and reports share this format. */
 export const fmt = (v: number | null | undefined, digits = 1, signed = false) =>

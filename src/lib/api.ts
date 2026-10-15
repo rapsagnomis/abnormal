@@ -1,8 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type Slot = 0 | 1;
-export const SLOTS: Slot[] = [0, 1];
-export const SLOT_LABELS = ["A", "B"] as const;
+/** A playback slot: 0 = A (your track), 1 = B (the reference), 2–7 = extra tracks. */
+export type Slot = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+/** A side of the compared pair: 0 = the track, 1 = the reference (any two slots, see `pair.ts`). */
+export type ABSlot = 0 | 1;
+export const SLOTS: ABSlot[] = [0, 1];
+/** Engine slots; keep in step with `SLOTS` in player.rs. */
+export const ALL_SLOTS: Slot[] = [0, 1, 2, 3, 4, 5, 6, 7];
+/** Engine slots the extra tracks can take. */
+export const EXTRA_SLOTS: Slot[] = [2, 3, 4, 5, 6, 7];
+/** Labels in display order: A, B, then the extra tracks as C, D, … in the order they were added. */
+export const SLOT_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
 
 export interface Peaks {
   buckets: number;
@@ -24,13 +32,21 @@ export interface TrackInfo {
   album: string | null;
   /** Absolute path of the album art thumbnail. */
   cover: string | null;
+  /** The cover's colour ("#rrggbb"), used for the lane in place of its letter's; null without one. */
+  accent: string | null;
+  /** The cover's one or two dominant colours: the base of the song-part palette (empty without). */
+  palette: string[];
 }
 
 export interface Transport {
   playing: boolean;
   active: Slot;
-  loopEnabled: boolean;
-  positions: [number, number];
+  /** Per slot: looping its selection. */
+  loopEnabled: boolean[];
+  /** Playhead per slot, in seconds. */
+  positions: number[];
+  /** Peak level per slot over the last audio buffer, linear; 0 when paused (for the meters). */
+  levels: number[];
 }
 
 export interface AudioStatus {
@@ -311,6 +327,18 @@ export interface MatchReport extends EqReport {
   full: FullMatch;
 }
 
+/** EQ to render into an export: the chosen moves, or the full match's curves. */
+export type ExportEq = { kind: "moves"; filters: EqFilter[] } | { kind: "full"; mid: number[]; side: number[] };
+
+export interface Exported {
+  /** Gain applied after the EQ, dB. */
+  gainDb: number;
+  /** Integrated loudness of the result over the measured range, LUFS. */
+  loudness: number;
+  /** Sample peak of the result, dBFS (above 0 = clipped, unless written as float). */
+  peakDb: number;
+}
+
 /** A detected song section; sections with the same label sound alike. */
 export interface Section {
   start: number;
@@ -353,7 +381,8 @@ export const api = {
   seek: (slot: Slot, seconds: number) => invoke<void>("seek", { slot, seconds }),
   setLoop: (slot: Slot, region: Region | null) =>
     invoke<void>("set_loop", { slot, region: region ? [region.start, region.end] : null }),
-  setLoopEnabled: (enabled: boolean) => invoke<void>("set_loop_enabled", { enabled }),
+  /** Loop a track's selection (or stop). */
+  setLoopEnabled: (slot: Slot, enabled: boolean) => invoke<void>("set_loop_enabled", { slot, enabled }),
   transport: () => invoke<Transport>("transport"),
   analyze: (slot: Slot, region: Region | null, curves: boolean) =>
     invoke<AnalysisReport>("analyze", {
@@ -363,23 +392,36 @@ export const api = {
     }),
   rangePeaks: (slot: Slot, start: number, end: number, buckets: number) =>
     invoke<Peaks>("range_peaks", { slot, start, end, buckets }),
-  setTrims: (db: [number, number]) => invoke<void>("set_trims", { db }),
+  setTrims: (db: number[]) => invoke<void>("set_trims", { db }),
   /** App-wide output volume, linear 0–1. */
   setVolume: (gain: number) => invoke<void>("set_volume", { gain }),
   setEq: (slot: Slot, filters: EqFilter[], enabled: boolean) => invoke<void>("set_eq", { slot, filters, enabled }),
+  /** Spectrum of the ~0.4 s up to `seconds` on a track, normalised by its loudness like the long-term one; null if silent. */
+  liveSpectrum: (slot: Slot, seconds: number, integrated: number | null) =>
+    invoke<number[] | null>("live_spectrum", { slot, seconds, integrated }),
   /** `rows × columns` bytes, row 0 = highest frequency. */
   spectrogram: (slot: Slot, start: number, end: number, columns: number, rows: number) =>
     invoke<ArrayBuffer>("spectrogram", { slot, start, end, columns, rows }).then((b) => new Uint8Array(b)),
   sections: (slot: Slot) => invoke<Section[]>("sections", { slot }),
   bandActivity: (slot: Slot, region: Region | null) =>
     invoke<BandActivity>("band_activity", { slot, range: region ? [region.start, region.end] : null }),
-  /** EQ match of A towards B over each track's range (null = whole track). */
-  matchEq: (ranges: [Region | null, Region | null], loudest: boolean) =>
-    invoke<MatchReport>("match_eq", { ranges: ranges.map((r) => (r ? [r.start, r.end] : null)), loudest }),
-  /** Render A's playback through full-match curves (null drops it); false if overtaken. */
+  /** EQ match of the track towards the reference (`slots`), over each one's range (null = whole track). */
+  matchEq: (slots: [Slot, Slot], ranges: [Region | null, Region | null], loudest: boolean) =>
+    invoke<MatchReport>("match_eq", { slots, ranges: ranges.map((r) => (r ? [r.start, r.end] : null)), loudest }),
+  /** Render a track's playback through full-match curves (null drops it); false if overtaken. */
   renderFullMatch: (slot: Slot, curves: { mid: number[]; side: number[] } | null) =>
     invoke<boolean>("render_full_match", { slot, curves }),
   setFullMatch: (slot: Slot, enabled: boolean) => invoke<void>("set_full_match", { slot, enabled }),
+  /** Write the track (`slots[0]`) as WAV with `eq` and/or its loudness matched to the reference, measured over `ranges`. */
+  exportTrack: (
+    path: string,
+    slots: [Slot, Slot],
+    eq: ExportEq | null,
+    matchLoudness: boolean,
+    ranges: [Region | null, Region | null],
+    float: boolean,
+  ) =>
+    invoke<Exported>("export_track", { path, slots, eq, matchLoudness, ranges: ranges.map((r) => (r ? [r.start, r.end] : null)), float }),
   /** The user's Pro-Q 4 "Default Setting" preset text, if any. */
   proQTemplate: () => invoke<string | null>("pro_q_template"),
   libraryStatus: () => invoke<LibraryStatus>("library_status"),

@@ -149,6 +149,14 @@ pub struct Biquad {
 }
 
 impl Biquad {
+    /// One sample through the filter, transposed direct form II with state `z`.
+    pub fn process(&self, z: &mut [f64; 2], x: f64) -> f64 {
+        let y = self.b0 * x + z[0];
+        z[0] = self.b1 * x - self.a1 * y + z[1];
+        z[1] = self.b2 * x - self.a2 * y;
+        y
+    }
+
     /// Magnitude response at `f` Hz, dB.
     #[cfg(test)]
     pub fn response_db(&self, f: f64, sample_rate: f64) -> f64 {

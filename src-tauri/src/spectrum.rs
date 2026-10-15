@@ -76,6 +76,18 @@ fn db(power: f64) -> f64 {
     10.0 * power.log10()
 }
 
+/// Spectrum of the single FFT frame ending at `seconds` (what's playing now), normalised like
+/// `analyze`'s `level`. `None` if the frame is silent.
+pub fn live(audio: &AudioData, seconds: f64, integrated: Option<f64>) -> Option<Vec<f32>> {
+    let end = ((seconds.max(0.0) * audio.sample_rate as f64) as usize).min(audio.frames());
+    let start = end.saturating_sub(FFT_SIZE);
+    if end <= start {
+        return None;
+    }
+    let report = analyze(audio, start, end, integrated);
+    report.centroid.is_some().then_some(report.level)
+}
+
 pub fn grid() -> Vec<f64> {
     let n = ((GRID_MAX_HZ / GRID_MIN_HZ).log2() * POINTS_PER_OCTAVE).round() as usize;
     (0..=n).map(|i| GRID_MIN_HZ * 2f64.powf(i as f64 / POINTS_PER_OCTAVE)).collect()

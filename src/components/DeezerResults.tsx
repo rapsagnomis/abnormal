@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
+import { SkeletonRows } from "./SkeletonRows";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../lib/api";
-import type { DeezerStatus, DeezerTrack, DownloadItem, DownloadKind, Slot } from "../lib/api";
+import type { ABSlot, DeezerStatus, DeezerTrack, DownloadItem, DownloadKind } from "../lib/api";
 import { formatTime } from "../lib/format";
 import { LoadButtons } from "./LoadButtons";
 
@@ -14,7 +16,7 @@ interface Props {
   query: string;
   /** Paths of the tracks loaded in A and B. */
   paths: [string | null, string | null];
-  onLoad: (slot: Slot, path: string) => void;
+  onLoad: (side: ABSlot, path: string) => void;
 }
 
 /** Deezer search results with download buttons, through the headless Deemix server; once a
@@ -82,14 +84,15 @@ export function DeezerResults({ query, paths, onLoad }: Props) {
         <>
           {!status.loggedIn && <Login onStatus={setStatus} />}
           {query.length < MIN_QUERY ? null : tracks === null ? (
-            !error && <p className="chart-note">Searching Deezer…</p>
+            !error && <SkeletonRows />
           ) : tracks.length === 0 ? (
             <p className="chart-note">Nothing on Deezer for “{query}”.</p>
           ) : (
             <ol className="matches">
-              {tracks.map((t) => (
+              {tracks.map((t, i) => (
                 <DeezerRow
                   key={t.id}
+                  index={i}
                   track={t}
                   downloads={downloads}
                   pending={pending}
@@ -168,6 +171,7 @@ function Login({ onStatus }: { onStatus: (s: DeezerStatus) => void }) {
 
 function DeezerRow({
   track: t,
+  index,
   downloads,
   pending,
   canDownload,
@@ -176,6 +180,8 @@ function DeezerRow({
   onLoad,
 }: {
   track: DeezerTrack;
+  /** Position in the list, for the staggered entrance. */
+  index: number;
   downloads: DownloadItem[];
   pending: string[];
   canDownload: boolean;
@@ -189,7 +195,7 @@ function DeezerRow({
   // This track's file, whether it came alone or with its album.
   const file = downloads.flatMap((d) => d.files).find((f) => f.trackId === t.id)?.path;
   return (
-    <li className="match deezer-row">
+    <li className="match deezer-row" style={{ "--i": index } as CSSProperties}>
       {t.cover ? <img className="cover" src={t.cover} alt="" /> : <span className="cover" />}
       <div className="match-body">
         <div className="match-title">{t.title}</div>
@@ -248,8 +254,16 @@ function DownloadButton({
         : queuing && !item
           ? "Queuing…"
           : "Queued";
+    // The button fills up as the download runs.
+    const done =
+      item?.status === "downloading" ? (kind === "album" && item.size > 1 ? (item.downloaded / item.size) * 100 : item.progress) : 0;
     return (
-      <button className="download busy" disabled title={`Downloading the ${kind} as FLAC into the library`}>
+      <button
+        className="download busy"
+        disabled
+        style={{ "--progress": `${done}%` } as CSSProperties}
+        title={`Downloading the ${kind} as FLAC into the library`}
+      >
         {text}
       </button>
     );

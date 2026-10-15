@@ -39,6 +39,7 @@ pub fn compute_peaks_range(audio: &AudioData, start: usize, end: usize, buckets:
         }
         min.push(lo);
         max.push(hi);
+
     }
 
     Peaks { buckets, min, max }

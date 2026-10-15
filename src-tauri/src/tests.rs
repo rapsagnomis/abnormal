@@ -73,6 +73,37 @@ fn peaks_cover_signal() {
     assert!((min + MINUS_6_DB).abs() < 0.02);
 }
 
+#[test]
+fn cover_accent_picks_the_vivid_dominant_hue() {
+    use crate::accent::accent_of;
+    let hue_of = |hex: &str| {
+        let c: Vec<u8> = (0..3).map(|i| u8::from_str_radix(&hex[1 + 2 * i..3 + 2 * i], 16).unwrap()).collect();
+        (c[0], c[1], c[2])
+    };
+    // Mostly grey with a red patch: the red, lifted to a bright tone.
+    let mut px = vec![[120u8, 120, 120]; 900];
+    px.extend(vec![[150u8, 20, 20]; 100]);
+    let (r, g, b) = hue_of(&accent_of(px.into_iter()).unwrap());
+    assert!(r > 190 && g < 110 && b < 110, "red accent, got {r},{g},{b}");
+    // A dull dominant brown and a vivid secondary blue: the blue (brighter, more saturated).
+    let mut px = vec![[110u8, 80, 50]; 600];
+    px.extend(vec![[30u8, 90, 240]; 300]);
+    let (r, _, b) = hue_of(&accent_of(px.into_iter()).unwrap());
+    assert!(b > r + 60, "blue accent, got {r},_,{b}");
+    // Both dominant hues come back for the part palette (dominance weighs vividness as well as
+    // area, so the order isn't checked): one warm (the brown), one blue.
+    let mut px = vec![[110u8, 80, 50]; 600];
+    px.extend(vec![[30u8, 90, 240]; 300]);
+    let palette = crate::accent::colors_of(px.into_iter()).unwrap().palette;
+    assert_eq!(palette.len(), 2);
+    let hues: Vec<_> = palette.iter().map(|c| hue_of(c)).collect();
+    assert!(hues.iter().any(|&(r, g, b)| r > g && g > b), "a warm (brown) colour: {palette:?}");
+    assert!(hues.iter().any(|&(r, _, b)| b > r + 60), "a blue colour: {palette:?}");
+    // Black and white: no colour.
+    let px = (0..1000).map(|i| if i % 2 == 0 { [0u8, 0, 0] } else { [255u8, 255, 255] });
+    assert!(accent_of(px).is_none());
+}
+
 // ── Loudness: EBU Tech 3341 / 3342 style signals, synthesised in place ─────────────────
 
 mod loudness {
@@ -761,6 +792,34 @@ mod eq {
             let (got, want) = (gain_db(hz), shelf.response_db(hz));
             assert!((got - want).abs() < 0.3, "{hz} Hz: {got:.2} vs {want:.2}");
         }
+    }
+
+    #[test]
+    fn export_keeps_or_matches_loudness() {
+        use crate::export::{ExportEq, export};
+        use crate::loudness;
+
+        let rate = 44100;
+        let stereo = |seed, amp| AudioData { sample_rate: rate, channels: vec![noise(seed, 5 * rate as usize, amp), noise(seed + 1, 5 * rate as usize, amp)] };
+        let (track, reference) = (stereo(1, 0.3), stereo(3, 0.1));
+        let lufs = |a: &AudioData| loudness::analyze(a, 0, a.frames(), false).unwrap().stats.integrated.unwrap();
+        let whole = (0, track.frames());
+        let path = std::env::temp_dir().join(format!("abnormal-export-test-{}.wav", std::process::id()));
+        let boost = ExportEq::Moves { filters: vec![Filter::stereo(FilterKind::Peak, 1000.0, 6.0, 1.0)] };
+        let cut = ExportEq::Full { mid: vec![-6.0; grid().len()], side: vec![-6.0; grid().len()] };
+
+        // EQ only: level-compensated back to the track's own loudness, in 24-bit.
+        let out = export(&path, &track, whole, Some(&boost), None, false).unwrap();
+        let written = crate::decode::decode_file(&path).unwrap();
+        assert_eq!((written.sample_rate, written.channels.len(), written.frames()), (rate, 2, track.frames()));
+        assert!(out.gain_db < -0.2, "a boost is compensated: {:.2}", out.gain_db);
+        assert!((lufs(&written) - lufs(&track)).abs() < 0.1, "{:.2} vs {:.2}", lufs(&written), lufs(&track));
+
+        // Full match plus loudness match: lands on the reference, as 32-bit float.
+        export(&path, &track, whole, Some(&cut), Some((&reference, (0, reference.frames()))), true).unwrap();
+        let written = crate::decode::decode_file(&path).unwrap();
+        assert!((lufs(&written) - lufs(&reference)).abs() < 0.1, "{:.2} vs {:.2}", lufs(&written), lufs(&reference));
+        let _ = std::fs::remove_file(&path);
     }
 }
 

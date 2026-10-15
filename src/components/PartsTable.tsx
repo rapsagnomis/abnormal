@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { Glide } from "./Glide";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, SLOTS } from "../lib/api";
-import type { AnalysisReport, Slot, SongStructure, StructureSetup } from "../lib/api";
+import { usePair } from "../lib/pair";
+import type { ABSlot, AnalysisReport, Slot, SongStructure, StructureSetup } from "../lib/api";
 import { fmt } from "../lib/metrics";
 import { PART_LABELS, partsOf } from "../lib/structure";
 
@@ -34,10 +36,11 @@ interface Props {
   onInstall: () => void;
 }
 
-/** Loudness, width and tilt of each song part (intro, verse, chorus…) in A and B. */
+/** Loudness, width and tilt of each song part (intro, verse, chorus…) in the compared pair. */
 export function PartsTable({ structures, fullReports, paths, pending, setup, onInstall }: Props) {
   const [metric, setMetric] = useState<Metric>("loudness");
-  const stats = [usePartStats(0, structures[0], paths[0]), usePartStats(1, structures[1], paths[1])];
+  const { slots, labels: names } = usePair();
+  const stats = [usePartStats(slots[0], structures[0], paths[0]), usePartStats(slots[1], structures[1], paths[1])];
 
   const header = <h3 className="results-heading">By song part</h3>;
   if (!setup?.installed) {
@@ -58,7 +61,7 @@ export function PartsTable({ structures, fullReports, paths, pending, setup, onI
   }
 
   const [, , unit, note] = METRICS.find(([m]) => m === metric)!;
-  const value = (slot: Slot, label: string): number | null => {
+  const value = (slot: ABSlot, label: string): number | null => {
     const s = stats[slot]?.get(label);
     if (!s) return null;
     const v = s[metric];
@@ -72,6 +75,7 @@ export function PartsTable({ structures, fullReports, paths, pending, setup, onI
       <div className="row">
         {header}
         <div className="segmented" role="radiogroup" aria-label="Metric by song part">
+          <Glide />
           {METRICS.map(([m, name]) => (
             <button key={m} className={metric === m ? "on" : ""} onClick={() => setMetric(m)}>
               {name}
@@ -83,8 +87,8 @@ export function PartsTable({ structures, fullReports, paths, pending, setup, onI
         <thead>
           <tr>
             <th />
-            <th className="col-a">A</th>
-            <th className="col-b">B</th>
+            <th className="col-a">{names[0]}</th>
+            <th className="col-b">{names[1]}</th>
             <th>Δ</th>
           </tr>
         </thead>

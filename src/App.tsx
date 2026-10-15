@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open } from "@tauri-apps/plugin-dialog";
-import { api, AUDIO_EXTENSIONS, isAudioFile, SLOTS } from "./lib/api";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { ALL_SLOTS, api, AUDIO_EXTENSIONS, EXTRA_SLOTS, isAudioFile, SLOT_LABELS } from "./lib/api";
 import type {
   AnalysisReport,
   AudioStatus,
   BandActivity,
   EqFilter,
+  ExportEq,
   LibraryStatus,
   MatchReport,
   Region,
@@ -28,24 +30,41 @@ import type { Display } from "./components/Waveform";
 import { isWidth, loudnessChange, midSideCurves, movesOf } from "./lib/eq";
 import { passageFor } from "./lib/passages";
 import { TransportBar, VOLUME_MIN_DB } from "./components/TransportBar";
+import { ExportMenu } from "./components/ExportMenu";
+import { MatchControls } from "./components/MatchControls";
+import type { ExportOptions, ExportResult } from "./components/ExportMenu";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import type { AuditionKind, Scope, Tab } from "./components/AnalysisPanel";
 import { overlayFor } from "./lib/overlay";
 import type { CurveMode } from "./lib/overlay";
 import { matchingPart } from "./lib/structure";
 import type { Part } from "./lib/structure";
+import { pairColors } from "./lib/pair";
+import type { ComparedPair } from "./lib/pair";
+import { PairPicker } from "./components/PairPicker";
 import "./App.css";
 
 type Pair<T> = [T, T];
-const pair = <T,>(v: T): Pair<T> => [v, v];
-const setAt = <T,>(p: Pair<T>, slot: Slot, v: T): Pair<T> =>
-  slot === 0 ? [v, p[1]] : [p[0], v];
+/** Per-slot state for every lane: A, B and the extra slots, indexed by engine slot. */
+type PerSlot<T> = T[];
+const perSlot = <T,>(v: T): PerSlot<T> => ALL_SLOTS.map(() => v);
+const setAt = <P extends unknown[]>(p: P, slot: Slot, v: P[number]): P => {
+  const next = [...p] as P;
+  next[slot] = v;
+  return next;
+};
+
+/** Lanes shrink to share the height down to this, then the lane list scrolls. */
+const MIN_LANE_PX = 150;
+/** How long an extra lane takes to open or close. */
+const LANE_ANIMATION_MS = 220;
 
 const INITIAL_TRANSPORT: Transport = {
   playing: false,
   active: 0,
-  loopEnabled: false,
-  positions: [0, 0],
+  loopEnabled: ALL_SLOTS.map(() => false),
+  positions: ALL_SLOTS.map(() => 0),
+  levels: ALL_SLOTS.map(() => 0),
 };
 
 /** Wait this long after a selection changes before measuring it. */
@@ -64,20 +83,30 @@ const loadVolume = () => {
 const CURVE_CYCLE: CurveMode[] = ["off", "momentary", "shortTerm", "psr", "correlation"];
 
 export default function App() {
-  const [tracks, setTracks] = useState<Pair<TrackInfo | null>>(pair(null));
-  const [loading, setLoading] = useState<Pair<boolean>>(pair(false));
-  const [errors, setErrors] = useState<Pair<string | null>>(pair(null));
-  const [regions, setRegions] = useState<Pair<Region | null>>(pair(null));
-  const [views, setViews] = useState<Pair<View | null>>(pair(null));
+  const [tracks, setTracks] = useState<PerSlot<TrackInfo | null>>(perSlot(null));
+  const [loading, setLoading] = useState<PerSlot<boolean>>(perSlot(false));
+  const [errors, setErrors] = useState<PerSlot<string | null>>(perSlot(null));
+  const [regions, setRegions] = useState<PerSlot<Region | null>>(perSlot(null));
+  const [views, setViews] = useState<PerSlot<View | null>>(perSlot(null));
+  /** Extra lanes in display order (C, D, …), as engine slots; removing C makes D the new C. */
+  const [extras, setExtras] = useState<Slot[]>([]);
+  /** An extra lane opening (drawn collapsed for a frame so it can grow) or closing. */
+  const [entering, setEntering] = useState<Slot | null>(null);
+  /** The extra lane that just opened, while its row is still growing. */
+  const [opening, setOpening] = useState<Slot | null>(null);
+  const [leaving, setLeaving] = useState<Slot[]>([]);
+  /** The compared pair: the track (always the one listened to, unless that's the reference) and the pinned reference. */
+  const [subject, setSubject] = useState<Slot>(0);
+  const [reference, setReference] = useState<Slot>(1);
   const [transport, setTransport] = useState<Transport>(INITIAL_TRANSPORT);
   const [linked, setLinked] = useState(false);
   const [dropSlot, setDropSlot] = useState<Slot | null>(null);
   const [audioStatus, setAudioStatus] = useState<AudioStatus | null>(null);
 
-  const [reports, setReports] = useState<Pair<AnalysisReport | null>>(pair(null));
-  const [selectionReports, setSelectionReports] = useState<Pair<AnalysisReport | null>>(pair(null));
-  const [measuringFull, setMeasuringFull] = useState<Pair<boolean>>(pair(false));
-  const [measuringSel, setMeasuringSel] = useState<Pair<boolean>>(pair(false));
+  const [reports, setReports] = useState<PerSlot<AnalysisReport | null>>(perSlot(null));
+  const [selectionReports, setSelectionReports] = useState<PerSlot<AnalysisReport | null>>(perSlot(null));
+  const [measuringFull, setMeasuringFull] = useState<PerSlot<boolean>>(perSlot(false));
+  const [measuringSel, setMeasuringSel] = useState<PerSlot<boolean>>(perSlot(false));
   const [scope, setScope] = useState<Scope>("full");
   const [curveMode, setCurveMode] = useState<CurveMode>("shortTerm");
   const [matchEnabled, setMatchEnabled] = useState(false);
@@ -87,25 +116,30 @@ export default function App() {
   const [eqLoudest, setEqLoudest] = useState(false);
   const [library, setLibrary] = useState<LibraryStatus | null>(null);
   const [display, setDisplay] = useState<Display>("wave");
-  const [sections, setSections] = useState<Pair<Section[] | null>>(pair(null));
+  const [sections, setSections] = useState<PerSlot<Section[] | null>>(perSlot(null));
   /** Audition the suggested EQ on A's playback: the chosen moves, or the full match. */
   const [eqAudition, setEqAudition] = useState(false);
   const [auditionKind, setAuditionKind] = useState<AuditionKind>("moves");
-  /** The match A's full-match rendering was made for (rendering takes a moment). */
+  /** The match the compared track's full-match rendering was made for (rendering takes a moment). */
   const [fullRendered, setFullRendered] = useState<MatchReport | null>(null);
   const [volumeDb, setVolumeDb] = useState(loadVolume);
   const [eqActive, setEqActive] = useState<boolean[]>([]);
-  const [activity, setActivity] = useState<Pair<BandActivity | null>>(pair(null));
+  const [activity, setActivity] = useState<Pair<BandActivity | null>>([null, null]);
   /** Song parts, tempo and bars from the structure model (null until analysed). */
-  const [structures, setStructures] = useState<Pair<SongStructure | null>>(pair(null));
-  const [structurePending, setStructurePending] = useState<Pair<boolean>>(pair(false));
+  const [structures, setStructures] = useState<PerSlot<SongStructure | null>>(perSlot(null));
+  const [structurePending, setStructurePending] = useState<PerSlot<boolean>>(perSlot(false));
   const [structureSetup, setStructureSetup] = useState<StructureSetup | null>(null);
+  /** Live analyser: the spectrum of what's playing now, while playing with the Tonal tab open. */
+  const [live, setLive] = useState<{ slot: Slot; values: number[] } | null>(null);
 
   // Latest state for event handlers registered once (keyboard, drag & drop).
-  const latest = useRef({ tracks, regions, views, transport, linked, structures, structureSetup });
-  latest.current = { tracks, regions, views, transport, linked, structures, structureSetup };
+  /** Lanes in display order: A, B, then the extra tracks. */
+  const order = useMemo<Slot[]>(() => [0, 1, ...extras], [extras]);
+  const labelOf = (slot: Slot) => SLOT_LABELS[Math.max(0, order.indexOf(slot))];
+  const latest = useRef({ tracks, regions, views, transport, linked, structures, structureSetup, order, reports, pair: [0, 1] as Pair<Slot> });
+  latest.current = { tracks, regions, views, transport, linked, structures, structureSetup, order, reports, pair: [subject, reference] };
   /** Incremented per load so results for a replaced track are discarded. */
-  const loadSeq = useRef<Pair<number>>([0, 0]);
+  const loadSeq = useRef<PerSlot<number>>(perSlot(0));
 
   useEffect(() => {
     api.audioStatus().then(setAudioStatus);
@@ -132,7 +166,7 @@ export default function App() {
   // Structure results arrive as events; the model may also get set up while tracks are loaded.
   useEffect(() => {
     const done = listen<StructureOutcome>("structure", ({ payload }) => {
-      for (const slot of SLOTS) {
+      for (const slot of ALL_SLOTS) {
         if (latest.current.tracks[slot]?.path !== payload.path) continue;
         setStructures((s) => setAt(s, slot, payload.structure));
         setStructurePending((p) => setAt(p, slot, false));
@@ -144,7 +178,7 @@ export default function App() {
       setStructureSetup(payload);
       if (payload.installed && !wasInstalled) {
         latest.current.structureSetup = payload;
-        for (const slot of SLOTS) {
+        for (const slot of ALL_SLOTS) {
           const track = latest.current.tracks[slot];
           if (track) requestStructure(slot, track.path);
         }
@@ -293,7 +327,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(() => {
-      for (const slot of SLOTS) {
+      for (const slot of ALL_SLOTS) {
         const region = regions[slot];
         if (!tracks[slot] || !region) {
           setSelectionReports((s) => setAt(s, slot, null));
@@ -313,16 +347,22 @@ export default function App() {
     };
   }, [regions, tracks]);
 
-  const hasSelection = !!(regions[0] || regions[1]);
+  const hasSelection = regions.some(Boolean);
   const effectiveScope: Scope = hasSelection ? scope : "full";
   // In selection mode, a track without a selection is measured as a whole, so you can compare
   // e.g. your chorus against the full reference without selecting in both lanes.
   const useSelection = (slot: Slot) => effectiveScope === "selection" && !!regions[slot];
-  const shown = useMemo<Pair<AnalysisReport | null>>(
-    () => [0, 1].map((s) => (useSelection(s as Slot) ? selectionReports[s] : reports[s])) as Pair<AnalysisReport | null>,
+  const shownAll = useMemo<PerSlot<AnalysisReport | null>>(
+    () => ALL_SLOTS.map((s) => (useSelection(s) ? selectionReports[s] : reports[s])) as PerSlot<AnalysisReport | null>,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [effectiveScope, regions, selectionReports, reports],
   );
+  /** Per-slot state for the compared pair: [track, reference]. */
+  const pairOf = <T,>(q: PerSlot<T>): Pair<T> => [q[subject], q[reference]];
+  const pairSlots: Pair<Slot> = [subject, reference];
+  const shown = useMemo(() => pairOf(shownAll), [shownAll, subject, reference]);
+  /** Selected ranges of the pair, when measuring selections (null = whole track). */
+  const pairRanges = () => pairSlots.map((s) => (useSelection(s) ? regions[s] : null)) as Pair<Region | null>;
 
   // Stereo moves, then the width change and side moves; a fresh set starts with all switched on.
   const eqMoves = useMemo(() => movesOf(eq), [eq]);
@@ -331,7 +371,7 @@ export default function App() {
   }, [eqMoves]);
 
   const chosenEq = useMemo<EqFilter[]>(() => eqMoves.filter((_, i) => eqActive[i] ?? true), [eqMoves, eqActive]);
-  const eqAvailable = !!tracks[0] && (auditionKind === "moves" ? chosenEq.length > 0 : !!eq);
+  const eqAvailable = !!tracks[subject] && (auditionKind === "moves" ? chosenEq.length > 0 : !!eq);
   const eqOn = eqAudition && eqAvailable;
   const movesOn = eqOn && auditionKind === "moves";
   const fullWanted = eqOn && auditionKind === "full";
@@ -348,51 +388,64 @@ export default function App() {
     return fullOn && eq ? -loudnessChange(a.spectrum, eq.full.mid, eq.full.side) : 0;
   }, [movesOn, fullOn, shown[0], chosenEq, eq]);
 
+  // The EQ is auditioned on the compared track; when that changes, the previous one is left dry.
   useEffect(() => {
-    if (tracks[0]) api.setEq(0, chosenEq, movesOn);
-  }, [chosenEq, movesOn, tracks[0]]);
+    if (tracks[subject]) api.setEq(subject, chosenEq, movesOn);
+  }, [chosenEq, movesOn, tracks[subject], subject]);
+  useEffect(
+    () => () => {
+      api.setEq(subject, [], false);
+      api.setFullMatch(subject, false);
+      api.renderFullMatch(subject, null).catch(() => {});
+      setFullRendered(null);
+    },
+    [subject],
+  );
 
-  // The full match plays from a rendering of A through its curves, made when first asked for
-  // and again whenever the match changes while it's wanted; until then A plays as it is.
+  // The full match plays from a rendering of the track through its curves, made when first asked
+  // for and again whenever the match changes while it's wanted; until then it plays as it is.
   useEffect(() => {
     if (!fullWanted || !eq || fullRendered === eq) return;
     let cancelled = false;
     api
-      .renderFullMatch(0, { mid: eq.full.mid, side: eq.full.side })
+      .renderFullMatch(subject, { mid: eq.full.mid, side: eq.full.side })
       .then((done) => !cancelled && done && setFullRendered(eq))
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [fullWanted, eq, fullRendered]);
+  }, [fullWanted, eq, fullRendered, subject]);
 
   useEffect(() => {
-    if (tracks[0]) api.setFullMatch(0, fullOn);
-  }, [fullOn, tracks[0]]);
+    if (tracks[subject]) api.setFullMatch(subject, fullOn);
+  }, [fullOn, tracks[subject], subject]);
 
   // Loudness matching turns the louder track down to the quieter one; EQ compensation is added on
   // top. Never boost (if a trim would be positive, both come down instead), so playback can't
   // be pushed into clipping.
-  const trims = useMemo<Pair<number>>(() => {
-    const [a, b] = shown.map((r) => r?.loudness.stats.integrated ?? null);
-    const raw: Pair<number> = [eqCompensation, 0];
-    if (matchEnabled && a !== null && b !== null) {
-      const target = Math.min(a, b);
-      raw[0] += target - a;
-      raw[1] += target - b;
+  const levels = ALL_SLOTS.map((s) => (tracks[s] ? (shownAll[s]?.loudness.stats.integrated ?? null) : null));
+  const trims = useMemo<PerSlot<number>>(() => {
+    const raw: PerSlot<number> = ALL_SLOTS.map((s) => (s === subject ? eqCompensation : 0));
+    const known = levels.filter((v): v is number => v !== null);
+    if (matchEnabled && known.length >= 2) {
+      const target = Math.min(...known);
+      levels.forEach((v, s) => {
+        if (v !== null) raw[s] += target - v;
+      });
     }
-    const lift = Math.max(0, raw[0], raw[1]);
-    return [raw[0] - lift, raw[1] - lift];
-  }, [matchEnabled, shown[0]?.loudness.stats.integrated, shown[1]?.loudness.stats.integrated, eqCompensation]);
+    const lift = Math.max(0, ...raw);
+    return raw.map((t) => t - lift) as PerSlot<number>;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchEnabled, levels.join(), eqCompensation, subject]);
 
   // Band levels over time, for whatever is being measured: used to find where each EQ move matters.
-  const activityKey = SLOTS.map((s) => `${tracks[s]?.path ?? ""}@${useSelection(s) ? `${regions[s]!.start}-${regions[s]!.end}` : "full"}`).join("|");
+  const activityKey = pairSlots.map((s) => `${s}:${tracks[s]?.path ?? ""}@${useSelection(s) ? `${regions[s]!.start}-${regions[s]!.end}` : "full"}`).join("|");
   useEffect(() => {
     if (tab !== "tonal") return;
     let cancelled = false;
     const timer = setTimeout(() => {
       Promise.all(
-        SLOTS.map((s) => (tracks[s] ? api.bandActivity(s, useSelection(s) ? regions[s] : null).catch(() => null) : null)),
+        pairSlots.map((s) => (tracks[s] ? api.bandActivity(s, useSelection(s) ? regions[s] : null).catch(() => null) : null)),
       ).then(([a, b]) => {
         if (cancelled) return;
         setActivity([a, b]);
@@ -410,34 +463,82 @@ export default function App() {
     return eqMoves.map((f) => (a && b && !isWidth(f) ? passageFor(f, a, b) : null));
   }, [eqMoves, activity]);
 
-  // EQ match: moves on A towards B, for whatever is being measured (full tracks or selections).
-  // Runs once both are measured, so it follows the same ranges as the tables.
+  // EQ match: moves on the track towards the reference, for whatever is being measured (full
+  // tracks or selections). Runs once both are measured, so it follows the same ranges as the
+  // tables. A new pair drops the old match at once, so it's never auditioned on the wrong track.
+  const matchedPair = useRef("");
   useEffect(() => {
     const [a, b] = shown;
-    if (!a || !b) {
-      setEq(null);
-      return;
-    }
+    const key = pairSlots.join();
+    if (!a || !b || key !== matchedPair.current) setEq(null);
+    matchedPair.current = key;
+    if (!a || !b) return;
     let cancelled = false;
-    const ranges = SLOTS.map((s) => (useSelection(s) ? regions[s] : null)) as Pair<Region | null>;
     api
-      .matchEq(ranges, eqLoudest)
+      .matchEq(pairSlots, pairRanges(), eqLoudest)
       .then((r) => !cancelled && setEq(r))
       .catch(() => !cancelled && setEq(null));
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shown[0], shown[1], eqLoudest]);
+  }, [shown[0], shown[1], eqLoudest, subject, reference]);
 
-  const overlays = useMemo<Pair<ReturnType<typeof overlayFor>>>(
-    () => [overlayFor(curveMode, reports[0], shown[0]), overlayFor(curveMode, reports[1], shown[1])],
-    [curveMode, reports, shown[0], shown[1]],
+  /** Write the track with what's chosen, over the same ranges as the match; what was written, or null if cancelled. */
+  const exportTrack = async ({ eq: withEq, loudness, float }: ExportOptions): Promise<ExportResult | null> => {
+    const a = tracks[subject];
+    if (!a) return null;
+    const stem = a.path.replace(/\.[^./]+$/, "");
+    const tags = [withEq && "EQ", loudness && "loudness"].filter(Boolean).join(" + ");
+    let path = await save({ defaultPath: `${stem} (${tags} matched).wav`, filters: [{ name: "WAV", extensions: ["wav"] }] });
+    if (!path) return null;
+    if (!/\.wav$/i.test(path)) path += ".wav";
+    const exportEq: ExportEq | null = !withEq || !eq
+      ? null
+      : auditionKind === "moves"
+        ? { kind: "moves", filters: chosenEq }
+        : { kind: "full", mid: eq.full.mid, side: eq.full.side };
+    const r = await api.exportTrack(path, pairSlots, exportEq, loudness, pairRanges(), float);
+    const sign = (v: number) => `${v < 0 ? "−" : "+"}${Math.abs(v).toFixed(1)}`;
+    const peak = r.peakDb > 0 ? `peak ${sign(r.peakDb)} dBFS${float ? "" : ", clipped"}` : `peak ${sign(r.peakDb)} dBFS`;
+    return { path, details: `Gain ${sign(r.gainDb)} dB · ${r.loudness.toFixed(1)} LUFS · ${peak}` };
+  };
+
+  // Live analyser: poll the spectrum at the playhead of the track being heard, ~15 times a second.
+  const analysing = transport.playing && tab === "tonal";
+  useEffect(() => {
+    if (!analysing) {
+      setLive(null);
+      return;
+    }
+    let busy = false;
+    let alive = true;
+    const timer = setInterval(() => {
+      if (busy) return;
+      const { transport: tr, tracks: current, reports: full } = latest.current;
+      const slot = tr.active;
+      if (!current[slot]) return;
+      busy = true;
+      api
+        .liveSpectrum(slot, tr.positions[slot], full[slot]?.loudness.stats.integrated ?? null)
+        .then((values) => alive && setLive(values ? { slot, values } : null))
+        .catch(() => {})
+        .finally(() => (busy = false));
+    }, 66);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [analysing]);
+
+  const overlays = useMemo(
+    () => ALL_SLOTS.map((s) => overlayFor(curveMode, reports[s], shownAll[s])),
+    [curveMode, reports, shownAll],
   );
 
   useEffect(() => {
     api.setTrims(trims);
-  }, [trims[0], trims[1]]);
+  }, [trims.join()]);
 
   useEffect(() => {
     api.setVolume(volumeDb <= VOLUME_MIN_DB ? 0 : 10 ** (volumeDb / 20));
@@ -462,13 +563,60 @@ export default function App() {
     setTracks((t) => setAt(t, slot, null));
     setErrors((e) => setAt(e, slot, null));
     resetSlot(slot);
-    const other = (1 - slot) as Slot;
-    if (latest.current.transport.active === slot && latest.current.tracks[other]) {
-      await api.setActive(other);
-    }
+    if (latest.current.transport.active === slot) await listenElsewhere(slot);
   };
 
-  const loadedSlots = () => SLOTS.filter((s) => latest.current.tracks[s]);
+  /** Switch away from `slot` to the nearest loaded track before it, else after it. */
+  const listenElsewhere = async (slot: Slot) => {
+    const { order: lanes, tracks: current } = latest.current;
+    const i = lanes.indexOf(slot);
+    const others = [...lanes.slice(0, i).reverse(), ...lanes.slice(i + 1)];
+    const next = others.find((s) => current[s]);
+    if (next !== undefined) await api.setActive(next);
+  };
+
+  /** Add an empty lane for another track (C, then D), to drop or open a file into; its slot. */
+  const addExtra = (): Slot | undefined => {
+    const free = EXTRA_SLOTS.find((s) => !extras.includes(s) && !leaving.includes(s));
+    if (free === undefined) return undefined;
+    setExtras((x) => [...x, free]);
+    setEntering(free);
+    setOpening(free);
+    // Drawn collapsed first, then grown, so the lane opens smoothly.
+    requestAnimationFrame(() => requestAnimationFrame(() => setEntering(null)));
+    setTimeout(() => setOpening((o) => (o === free ? null : o)), LANE_ANIMATION_MS + 50);
+    return free;
+  };
+
+  /** Where "+ New" in the library loads: the first empty lane, else a new one (while under eight). */
+  const emptyLane = order.find((s) => !tracks[s] && !loading[s] && !leaving.includes(s));
+  const loadNew = {
+    label: emptyLane !== undefined ? labelOf(emptyLane) : extras.length < EXTRA_SLOTS.length ? SLOT_LABELS[order.length] : null,
+    load: (path: string) => {
+      const slot = emptyLane ?? addExtra();
+      if (slot !== undefined) loadFile(slot, path);
+    },
+  };
+
+  /** Close an extra lane: the track after it moves up (D becomes C). One at a time: clicks while a
+   *  lane is still closing are ignored, so a double-click removes one track, not two. */
+  const removeExtra = async (slot: Slot) => {
+    if (leaving.length) return;
+    setLeaving((l) => [...l, slot]);
+    if (latest.current.transport.active === slot) await listenElsewhere(slot);
+    loadSeq.current[slot]++;
+    setTimeout(async () => {
+      await api.unloadTrack(slot);
+      setTracks((t) => setAt(t, slot, null));
+      setErrors((e) => setAt(e, slot, null));
+      setLoading((l) => setAt(l, slot, false));
+      resetSlot(slot);
+      setExtras((x) => x.filter((s) => s !== slot));
+      setLeaving((l) => l.filter((s) => s !== slot));
+    }, LANE_ANIMATION_MS);
+  };
+
+  const loadedSlots = () => ALL_SLOTS.filter((s) => latest.current.tracks[s]);
 
   /** Seek one track, or every loaded track to the same time when playheads are linked. */
   const seek = useCallback((slot: Slot, seconds: number) => {
@@ -490,7 +638,7 @@ export default function App() {
   const toStart = useCallback(() => {
     const { regions: r, transport: tr } = latest.current;
     for (const s of loadedSlots()) {
-      api.seek(s, tr.loopEnabled && r[s] ? r[s]!.start : 0);
+      api.seek(s, tr.loopEnabled[s] && r[s] ? r[s]!.start : 0);
     }
   }, []);
 
@@ -507,6 +655,8 @@ export default function App() {
       next = setAt(next, s, clamped);
       api.setLoop(s, clamped);
       if (clamped) api.seek(s, clamped.start);
+      // No selection, nothing to loop: a later selection starts unlooped.
+      else api.setLoopEnabled(s, false);
     }
     setRegions(next);
     // A fresh selection is what you want to read numbers for.
@@ -538,26 +688,31 @@ export default function App() {
     if (latest.current.tracks[slot]?.path === track.path && detected) setStructures((s) => setAt(s, slot, detected));
   }, []);
 
-  /** A song part was clicked: select it, and the same part in the other track (2nd chorus ↔
+  /** A song part was clicked: select it, and the same part in the other tracks (2nd chorus ↔
    *  2nd chorus) so every tab compares like with like. Without a match there, linked mode
    *  falls back to the same times. */
   const selectPart = useCallback(
     (slot: Slot, part: Part) => {
       const { tracks: current, structures: found, linked: isLinked } = latest.current;
-      const other = (1 - slot) as Slot;
       const region = { start: part.start, end: part.end };
-      const counterpart = current[other] && found[other] ? matchingPart(part, found[other]!) : null;
       const updates: [Slot, Region | null][] = [[slot, region]];
-      if (counterpart) updates.push([other, counterpart]);
-      else if (isLinked && current[other]) updates.push([other, region]);
+      for (const other of ALL_SLOTS) {
+        if (other === slot || !current[other]) continue;
+        const counterpart = found[other] ? matchingPart(part, found[other]!) : null;
+        if (counterpart) updates.push([other, counterpart]);
+        else if (isLinked) updates.push([other, region]);
+      }
       applyRegions(updates);
     },
     [applyRegions],
   );
 
   const clearRegions = useCallback(() => {
-    for (const s of SLOTS) api.setLoop(s, null);
-    setRegions(pair(null));
+    for (const s of ALL_SLOTS) {
+      api.setLoop(s, null);
+      api.setLoopEnabled(s, false);
+    }
+    setRegions(perSlot(null));
   }, []);
 
   /**
@@ -609,38 +764,97 @@ export default function App() {
     if (latest.current.tracks[slot]) api.setActive(slot);
   }, []);
 
-  const toggleLoop = useCallback(() => {
-    api.setLoopEnabled(!latest.current.transport.loopEnabled);
+  /** Loop a track's selection, or stop: with linked selections, every loaded track's together. */
+  const toggleLoop = useCallback((slot: Slot) => {
+    const { transport: tr, linked: isLinked, regions: r } = latest.current;
+    const on = !tr.loopEnabled[slot];
+    for (const s of isLinked ? loadedSlots() : [slot]) if (!on || r[s]) api.setLoopEnabled(s, on);
   }, []);
 
-  /** Select and loop a passage of A, listening to A. */
+  /** Select and loop a passage of the compared track, listening to it. */
   const listenTo = useCallback(
     (region: Region) => {
-      if (!latest.current.tracks[0]) return;
-      setRegion(0, region);
-      api.setLoopEnabled(true);
-      selectSlot(0);
+      if (!latest.current.tracks[subject]) return;
+      setRegion(subject, region);
+      api.setLoopEnabled(subject, true);
+      selectSlot(subject);
     },
-    [setRegion, selectSlot],
+    [setRegion, selectSlot, subject],
   );
+
+  // The compared track follows the one being listened to (never the reference itself).
+  useEffect(() => {
+    const active = transport.active;
+    if (active !== reference && tracks[active]) setSubject(active);
+  }, [transport.active, reference, tracks]);
+
+  // A closed lane leaves the pair: fall back to A and B.
+  useEffect(() => {
+    if (!order.includes(reference)) setReference(subject === 1 ? 0 : 1);
+    if (!order.includes(subject)) setSubject(reference === 0 ? 1 : 0);
+  }, [order, subject, reference]);
+
+  /** Compare `slot`: the compared track is the one listened to, so this switches to it. */
+  const setPairTrack = (slot: Slot) => {
+    setSubject(slot);
+    selectSlot(slot);
+  };
+
+  /** Pin `slot` as the reference; if it was the compared track, the old reference takes its place. */
+  const setPairReference = (slot: Slot) => {
+    if (slot === reference) return;
+    if (slot === subject) setSubject(reference);
+    setReference(slot);
+  };
+
+  // A track with a colourful cover takes its colour: its letter's lane colour (and the darker chart
+  // variant) is repointed, so the lane, its button, meter and its columns/curves all follow.
+  const laneColors = Object.fromEntries(
+    order.flatMap((slot) => {
+      const accent = tracks[slot]?.accent;
+      if (!accent) return [];
+      const letter = labelOf(slot).toLowerCase();
+      return [
+        [`--lane-${letter}`, accent],
+        [`--series-lane-${letter}`, `color-mix(in srgb, ${accent} 78%, #101216)`],
+      ];
+    }),
+  ) as CSSProperties;
+
+  const pair: ComparedPair = { slots: pairSlots, labels: [labelOf(subject), labelOf(reference)] };
+  const loadedCount = order.filter((s) => tracks[s]).length;
+  /** Lane roles are worth marking once the pair isn't simply A vs B. */
+  const showRoles = loadedCount > 2 || subject !== 0 || reference !== 1;
+  const roleOf = (slot: Slot) =>
+    !showRoles || !tracks[slot] ? null : slot === reference ? ("reference" as const) : slot === subject ? ("track" as const) : null;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const handled = () => e.preventDefault();
+      // Number-row keys by position, whatever the layout: 1–8 on QWERTY, & é " ' ( § è ! on AZERTY.
+      const digit = /^Digit([0-8])$/.exec(e.code);
+      if (digit) {
+        const n = Number(digit[1]);
+        if (n === 0) setViews(perSlot(null));
+        else {
+          const slot = latest.current.order[n - 1];
+          if (slot !== undefined) selectSlot(slot);
+        }
+        return;
+      }
       switch (e.key) {
         case " ":
           handled();
           togglePlay();
           break;
-        case "Tab":
+        case "Tab": {
+          // Switch between the compared pair: the analysed track and the reference.
           handled();
-          selectSlot((1 - latest.current.transport.active) as Slot);
+          const { transport: tr, pair: [track, ref] } = latest.current;
+          selectSlot(tr.active === ref ? track : ref);
           break;
-        case "1":
-        case "2":
-          selectSlot((Number(e.key) - 1) as Slot);
-          break;
+        }
         case "ArrowLeft":
           handled();
           skip(e.shiftKey ? -1 : -5);
@@ -661,12 +875,9 @@ export default function App() {
         case "_":
           zoomActive(ZOOM_STEP);
           break;
-        case "0":
-          setViews(pair(null));
-          break;
         case "l":
         case "L":
-          toggleLoop();
+          toggleLoop(latest.current.transport.active);
           break;
         case "k":
         case "K":
@@ -698,10 +909,40 @@ export default function App() {
   }, [togglePlay, selectSlot, skip, toStart, toggleLoop, zoomActive, clearRegions]);
 
   return (
-    <div className="app">
+    <div className="app" style={laneColors}>
       <header className="app-header">
         <h1>(a/b)normal</h1>
-        <div className="header-actions">
+        {/* Everything that acts on the compared pair: who, how it's heard, what's written out. */}
+        <div className="compare-bar" style={pairColors(pair.labels)}>
+          <PairPicker
+            pair={pair}
+            lanes={order.map((slot) => ({ slot, label: labelOf(slot), loaded: !!tracks[slot] }))}
+            onPairTrack={setPairTrack}
+            onPairReference={setPairReference}
+          />
+          <span className="bar-divider" aria-hidden="true" />
+          <MatchControls
+            matchEnabled={matchEnabled}
+            matchBasis={effectiveScope === "selection" ? "the selections" : "the full tracks"}
+            onToggleMatch={() => setMatchEnabled((v) => !v)}
+            eqOn={eqOn}
+            eqAvailable={eqAvailable}
+            onToggleEq={() => setEqAudition((v) => !v)}
+            eqBusy={eqAudition && ((fullWanted && !fullOn) || (!eq && !!shown[0] && !!shown[1]))}
+            trackLabel={pair.labels[0]}
+          >
+            <ExportMenu
+              labels={pair.labels}
+              available={!!tracks[subject] && !!shown[0]}
+              eqLabel={!eq ? null : auditionKind === "moves" ? (chosenEq.length ? "chosen moves" : null) : "full match"}
+              canMatchLoudness={shown[1]?.loudness.stats.integrated != null}
+              eqOn={eqOn}
+              matchOn={matchEnabled}
+              onExport={exportTrack}
+            />
+          </MatchControls>
+        </div>
+        <div className="header-status">
           <span className={`audio-status${audioStatus?.error ? " error" : ""}`}>
             {audioStatus?.error
               ? `Audio output unavailable: ${audioStatus.error}`
@@ -713,11 +954,23 @@ export default function App() {
       </header>
 
       <div className="workspace">
-        <main className="lanes">
-          {SLOTS.map((slot) => (
+        <main
+          className="lanes"
+          style={{
+            gridTemplateRows: order
+              .map((s) => (s === entering || leaving.includes(s) ? "minmax(0px, 0fr)" : `minmax(${MIN_LANE_PX}px, 1fr)`))
+              .join(" "),
+          }}
+        >
+          {order.map((slot) => (
             <TrackLane
               key={slot}
               slot={slot}
+              label={labelOf(slot)}
+              index={order.indexOf(slot)}
+              closing={slot === entering || leaving.includes(slot)}
+              resizing={slot === opening || leaving.includes(slot)}
+              busy={loading[slot] || measuringFull[slot]}
               track={tracks[slot]}
               loading={loading[slot]}
               error={errors[slot]}
@@ -732,7 +985,10 @@ export default function App() {
               onPart={(p) => selectPart(slot, p)}
               onPartsEdit={(segments) => editParts(slot, segments)}
               onPartsReset={() => resetParts(slot)}
-              eqOn={slot === 0 && eqOn}
+              eqOn={slot === subject && eqOn}
+              role={roleOf(slot)}
+              outsidePair={loadedCount > 2 && slot !== subject && slot !== reference}
+              onPinReference={() => setPairReference(slot)}
               trimDb={trims[slot]}
               active={transport.active === slot && !!tracks[slot]}
               dropTarget={dropSlot === slot}
@@ -741,6 +997,8 @@ export default function App() {
               onClear={() => clearTrack(slot)}
               onSeek={(t) => seek(slot, t)}
               onRegion={(r) => setRegion(slot, r)}
+              looping={transport.loopEnabled[slot] ?? false}
+              onToggleLoop={() => toggleLoop(slot)}
               onView={(v) => setView(slot, v)}
             />
           ))}
@@ -749,12 +1007,13 @@ export default function App() {
         <AnalysisPanel
           tab={tab}
           onTab={setTab}
+          pair={pair}
           reports={shown}
-          pending={[0, 1].map((s) => (useSelection(s as Slot) ? measuringSel[s] : measuringFull[s])) as Pair<boolean>}
-          loaded={[!!tracks[0], !!tracks[1]]}
+          pending={pairSlots.map((s) => (useSelection(s) ? measuringSel[s] : measuringFull[s])) as Pair<boolean>}
+          loaded={[!!tracks[subject], !!tracks[reference]]}
           scope={effectiveScope}
           hasSelection={hasSelection}
-          regions={regions}
+          regions={pairOf(regions)}
           eq={eq}
           eqMoves={eqMoves}
           eqLoudest={eqLoudest}
@@ -762,7 +1021,7 @@ export default function App() {
           auditionKind={auditionKind}
           onAuditionKind={setAuditionKind}
           fullRendering={fullWanted && !fullOn}
-          paths={[tracks[0]?.path ?? null, tracks[1]?.path ?? null]}
+          paths={pairOf(tracks).map((t) => t?.path ?? null) as Pair<string | null>}
           library={library}
           eqActive={eqActive}
           eqAudition={eqOn}
@@ -772,45 +1031,44 @@ export default function App() {
           onEqAudition={setEqAudition}
           onListen={listenTo}
           onScope={setScope}
-          onLoad={loadFile}
+          onLoad={(side, path) => loadFile(pairSlots[side], path)}
           onRescan={() => api.rescanLibrary()}
-          fullReports={reports}
-          structures={structures}
-          structurePending={structurePending}
+          fullReports={pairOf(reports)}
+          structures={pairOf(structures)}
+          structurePending={pairOf(structurePending)}
           structureSetup={structureSetup}
           onStructureInstall={() => api.structureInstall()}
+          loadNew={loadNew}
+          live={live && tracks[live.slot] ? { label: labelOf(live.slot), values: live.values } : null}
         />
       </div>
 
       <TransportBar
         playing={transport.playing}
         active={transport.active}
-        loopEnabled={transport.loopEnabled}
+        levels={transport.levels}
         linked={linked}
-        hasTracks={[!!tracks[0], !!tracks[1]]}
+        lanes={order.map((slot) => ({ slot, label: labelOf(slot), loaded: !!tracks[slot], leaving: leaving.includes(slot), role: roleOf(slot) }))}
+        canAdd={extras.length < EXTRA_SLOTS.length}
+        onAdd={addExtra}
+        onRemove={removeExtra}
+        onRemoveLast={() => extras.length && removeExtra(extras[extras.length - 1])}
         onTogglePlay={togglePlay}
         onToStart={toStart}
         onSkip={skip}
         onSelect={selectSlot}
-        onToggleLoop={toggleLoop}
         onToggleLinked={() => setLinked((v) => !v)}
         curveMode={curveMode}
         onCurveMode={setCurveMode}
-        matchEnabled={matchEnabled}
-        matchBasis={effectiveScope === "selection" ? "the selections" : "the full tracks"}
-        onToggleMatch={() => setMatchEnabled((v) => !v)}
         display={display}
         onDisplay={setDisplay}
-        eqOn={eqOn}
-        eqAvailable={eqAvailable}
-        onToggleEq={() => setEqAudition((v) => !v)}
         volumeDb={volumeDb}
         onVolume={setVolumeDb}
       />
 
       <p className="hints">
-        Space play · Tab or 1/2 A/B · ←/→ ±5 s · drag to select, double-click/Esc clears · wheel or
-        pinch to zoom, Shift+wheel to pan · +/− zoom · 0 fit · L loop · K link · M loudness match · E EQ · C curve · S
+        Space play · Tab track ⇄ reference · number row (&é"'… / 1 2 3…) pick a track · ←/→ ±5 s · drag to select (⟳ on it loops), double-click/Esc clears · wheel or
+        pinch to zoom, Shift+wheel to pan · +/− zoom · 0 (à) fit · L loop selection · K link · M loudness match · E EQ · C curve · S
         spectrogram · click a section to select it, Shift+click to extend
       </p>
     </div>

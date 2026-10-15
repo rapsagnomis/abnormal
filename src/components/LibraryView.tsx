@@ -1,7 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import { Glide } from "./Glide";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { api, SLOT_LABELS, SLOTS } from "../lib/api";
-import type { AnalysisReport, LibraryMatch, LibraryStatus, LibraryTrack, MatchWeights, Slot } from "../lib/api";
+import { api, SLOTS } from "../lib/api";
+import { useFlip } from "../lib/motion";
+import { usePair } from "../lib/pair";
+import { SkeletonRows } from "./SkeletonRows";
+import { TweenedValue } from "./TweenedValue";
+import type { ABSlot, AnalysisReport, LibraryMatch, LibraryStatus, LibraryTrack, MatchWeights } from "../lib/api";
 import { formatTime } from "../lib/format";
 import { DeezerResults } from "./DeezerResults";
 import { LoadButtons } from "./LoadButtons";
@@ -28,7 +34,7 @@ interface Props {
   /** Paths of the tracks loaded in A and B. */
   paths: [string | null, string | null];
   status: LibraryStatus | null;
-  onLoad: (slot: Slot, path: string) => void;
+  onLoad: (side: ABSlot, path: string) => void;
   onRescan: () => void;
 }
 
@@ -51,13 +57,16 @@ export function LibraryView({ reports, paths, status, onLoad, onRescan }: Props)
           if (e.key === "Escape") setQuery("");
         }}
       />
+      {/* Search results and matches fade in when switching between them. */}
       {searching ? (
-        <>
+        <div key="search" className="fade-in library-results">
           <SearchResults query={query.trim()} paths={paths} status={status} onLoad={onLoad} />
           <DeezerResults query={query.trim()} paths={paths} onLoad={onLoad} />
-        </>
+        </div>
       ) : (
-        <Matches reports={reports} paths={paths} status={status} onLoad={onLoad} />
+        <div key="matches" className="fade-in library-results">
+          <Matches reports={reports} paths={paths} status={status} onLoad={onLoad} />
+        </div>
       )}
     </>
   );
@@ -67,6 +76,8 @@ function SearchResults({ query, paths, status, onLoad }: { query: string; paths:
   const [tracks, setTracks] = useState<LibraryTrack[] | null>(null);
   const [showAll, setShowAll] = useState(false);
   useEffect(() => setShowAll(false), [query]);
+  const list = useRef<HTMLOListElement>(null);
+  useFlip(list, [tracks, showAll]);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,14 +95,14 @@ function SearchResults({ query, paths, status, onLoad }: { query: string; paths:
   }, [query, Math.floor((status?.indexed ?? 0) / REFRESH_EVERY), status?.scanning]);
 
   const heading = <h3 className="results-heading">In your library</h3>;
-  if (tracks === null) return <>{heading}<p className="chart-note">Searching…</p></>;
+  if (tracks === null) return <>{heading}<SkeletonRows /></>;
   if (tracks.length === 0) return <>{heading}<p className="chart-note">No library track matches “{query}”.</p></>;
   return (
     <>
       {heading}
-      <ol className="matches">
-        {(showAll ? tracks : tracks.slice(0, SEARCH_PREVIEW)).map((t) => (
-          <TrackRow key={t.path} track={t} paths={paths} onLoad={onLoad} />
+      <ol className="matches" ref={list}>
+        {(showAll ? tracks : tracks.slice(0, SEARCH_PREVIEW)).map((t, i) => (
+          <TrackRow key={t.path} index={i} track={t} paths={paths} onLoad={onLoad} />
         ))}
       </ol>
       {!showAll && tracks.length > SEARCH_PREVIEW ? (
@@ -107,12 +118,16 @@ function SearchResults({ query, paths, status, onLoad }: { query: string; paths:
 }
 
 function Matches({ reports, paths, status, onLoad }: Omit<Props, "onRescan">) {
-  const [source, setSource] = useState<Slot>(0);
+  const [source, setSource] = useState<ABSlot>(0);
   const [focus, setFocus] = useState<Focus>("all");
   const [matches, setMatches] = useState<LibraryMatch[] | null>(null);
+  const { labels } = usePair();
+  const list = useRef<HTMLOListElement>(null);
+  // Re-ranked (another focus, track or selection): rows glide to their new places.
+  useFlip(list, [matches]);
 
   // Match the chosen track, or the other one if only that is loaded.
-  const slot: Slot | null = reports[source] ? source : reports[1 - source] ? ((1 - source) as Slot) : null;
+  const slot: ABSlot | null = reports[source] ? source : reports[1 - source] ? ((1 - source) as ABSlot) : null;
   const features = slot === null ? null : reports[slot]!.features;
   const exclude = slot === null ? null : paths[slot];
   const weights = FOCUS.find(([f]) => f === focus)![2];
@@ -138,19 +153,21 @@ function Matches({ reports, paths, status, onLoad }: Omit<Props, "onRescan">) {
     <>
       <div className="similar-controls">
         <div className="segmented" role="radiogroup" aria-label="Track to match">
+          <Glide />
           {SLOTS.map((s) => (
             <button
               key={s}
               className={slot === s ? "on" : ""}
               disabled={!reports[s]}
               onClick={() => setSource(s)}
-              title={`Find library tracks that sound like ${SLOT_LABELS[s]}`}
+              title={`Find library tracks that sound like ${labels[s]}`}
             >
-              Like {SLOT_LABELS[s]}
+              Like {labels[s]}
             </button>
           ))}
         </div>
         <div className="segmented" role="radiogroup" aria-label="Compare on">
+          <Glide />
           {FOCUS.map(([f, name]) => (
             <button key={f} className={focus === f ? "on" : ""} onClick={() => setFocus(f)}>
               {name}
@@ -162,14 +179,14 @@ function Matches({ reports, paths, status, onLoad }: Omit<Props, "onRescan">) {
       {slot === null ? (
         <p className="chart-note">Search above to load a library track, or load a track to find songs with a similar sound.</p>
       ) : matches === null ? (
-        <p className="chart-note">Searching…</p>
+        <SkeletonRows />
       ) : matches.length === 0 ? (
         <p className="chart-note">No analysed library tracks yet.</p>
       ) : (
         <>
-          <ol className="matches">
-            {matches.map((m) => (
-              <TrackRow key={m.path} track={m} match={m} paths={paths} onLoad={onLoad} />
+          <ol className="matches" ref={list}>
+            {matches.map((m, i) => (
+              <TrackRow key={m.path} index={i} track={m} match={m} paths={paths} onLoad={onLoad} />
             ))}
           </ol>
           <p className="chart-note">
@@ -196,14 +213,29 @@ function LibraryLine({ status, onRescan }: { status: LibraryStatus | null; onRes
         Rescan
       </button>
       {status.scanning && status.queued > 0 && (
-        <progress className="library-progress" max={status.queued} value={status.done} />
+        <div className="library-progress" role="progressbar" aria-valuemax={status.queued} aria-valuenow={status.done}>
+          <span style={{ width: `${(status.done / status.queued) * 100}%` }} />
+        </div>
       )}
     </div>
   );
 }
 
 /** A library track with load buttons; with `match`, also its similarity scores. */
-function TrackRow({ track: t, match: m, paths, onLoad }: { track: LibraryTrack; match?: LibraryMatch; paths: Props["paths"]; onLoad: Props["onLoad"] }) {
+function TrackRow({
+  track: t,
+  match: m,
+  index,
+  paths,
+  onLoad,
+}: {
+  track: LibraryTrack;
+  match?: LibraryMatch;
+  /** Position in the list, for the staggered entrance. */
+  index: number;
+  paths: Props["paths"];
+  onLoad: Props["onLoad"];
+}) {
   // Tags when the file has them, else the file name and its folder.
   const parts = t.relPath.split("/");
   const fileName = parts[parts.length - 1].replace(/\.[^.]+$/, "");
@@ -219,8 +251,17 @@ function TrackRow({ track: t, match: m, paths, onLoad }: { track: LibraryTrack; 
       ]
     : [];
   return (
-    <li className={`match${m ? " scored" : ""}`} title={[t.path, ...t.copies].join("\n")}>
-      {m && <span className="match-score">{Math.round(m.score)}</span>}
+    <li
+      className={`match${m ? " scored" : ""}`}
+      data-key={t.path}
+      style={{ "--i": index } as CSSProperties}
+      title={[t.path, ...t.copies].join("\n")}
+    >
+      {m && (
+        <span className="match-score">
+          <TweenedValue value={m.score} show={(x) => (x === null ? "—" : String(Math.round(x)))} />
+        </span>
+      )}
       {t.cover ? <img className="cover" src={convertFileSrc(t.cover)} alt="" loading="lazy" /> : <span className="cover" aria-hidden="true">♪</span>}
       <div className="match-body">
         <div className="match-title">{name}</div>
@@ -249,3 +290,4 @@ function TrackRow({ track: t, match: m, paths, onLoad }: { track: LibraryTrack; 
     </li>
   );
 }
+

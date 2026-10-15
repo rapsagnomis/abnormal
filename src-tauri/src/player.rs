@@ -20,7 +20,8 @@ use crate::decode::AudioData;
 use crate::eq::{Biquad, Filter, Placement};
 use crate::fir;
 
-pub const SLOTS: usize = 2;
+/// A and B, then up to six extra tracks to switch between (C–H).
+pub const SLOTS: usize = 8;
 const NONE: u64 = u64::MAX;
 /// Length of A/B crossfades and pause/resume fades.
 const FADE_SECONDS: f32 = 0.015;
@@ -41,26 +42,19 @@ struct EqSettings {
     enabled: bool,
 }
 
-/// Transposed direct form II state, per stage and channel (a side stage uses the first).
+/// Filter state (see `Biquad::process`), per stage and channel (a side stage uses the first).
 type EqState = [[[f64; 2]; 2]; MAX_EQ_STAGES];
-
-fn biquad(q: &Biquad, z: &mut [f64; 2], x: f64) -> f64 {
-    let y = q.b0 * x + z[0];
-    z[0] = q.b1 * x - q.a1 * y + z[1];
-    z[1] = q.b2 * x - q.a2 * y;
-    y
-}
 
 fn run_eq(settings: &EqSettings, state: &mut EqState, l: f32, r: f32) -> (f32, f32) {
     let mut x = [l as f64, r as f64];
     for ((q, st), &side) in settings.stages[..settings.count].iter().zip(state.iter_mut()).zip(&settings.side) {
         if side {
             let (m, s) = ((x[0] + x[1]) * 0.5, (x[0] - x[1]) * 0.5);
-            let s = biquad(q, &mut st[0], s);
+            let s = q.process(&mut st[0], s);
             x = [m + s, m - s];
         } else {
             for (v, z) in x.iter_mut().zip(st.iter_mut()) {
-                *v = biquad(q, z, *v);
+                *v = q.process(z, *v);
             }
         }
     }
@@ -130,7 +124,8 @@ pub struct Shared {
     pub device_rate: AtomicU32,
     playing: AtomicBool,
     active: AtomicUsize,
-    loop_enabled: AtomicBool,
+    /// Per track: loop its selection.
+    loop_enabled: [AtomicBool; SLOTS],
     /// Per-track gain trim (linear, stored as f32 bits), e.g. for loudness matching.
     trims: [AtomicU32; SLOTS],
     /// App-wide output volume (linear, 0–1, stored as f32 bits), applied after the trims.
@@ -146,6 +141,9 @@ pub struct Shared {
     alt_enabled: [AtomicBool; SLOTS],
     /// Bumped by each alternate render, so a slower earlier one can't replace a newer one.
     alt_generation: [AtomicU64; SLOTS],
+    /// Peak level of each track over the last callback (linear, f32 bits), after its trim and EQ
+    /// but before the A/B switch and volume: what it would play at if switched to. 0 when paused.
+    meters: [AtomicU32; SLOTS],
     /// Playback EQ per slot; the callback copies it when `eq_version` changes.
     eq: Mutex<[EqSettings; SLOTS]>,
     eq_version: AtomicU64,
@@ -156,9 +154,12 @@ pub struct Shared {
 pub struct Transport {
     pub playing: bool,
     pub active: usize,
-    pub loop_enabled: bool,
+    /// Per track: looping its selection.
+    pub loop_enabled: [bool; SLOTS],
     /// Playhead per slot, in seconds.
     pub positions: [f64; SLOTS],
+    /// Peak level per track over the last audio buffer, linear (see `Shared::meters`).
+    pub levels: [f32; SLOTS],
 }
 
 impl Shared {
@@ -167,7 +168,7 @@ impl Shared {
             device_rate: AtomicU32::new(0),
             playing: AtomicBool::new(false),
             active: AtomicUsize::new(0),
-            loop_enabled: AtomicBool::new(false),
+            loop_enabled: [const { AtomicBool::new(false) }; SLOTS],
             trims: [const { AtomicU32::new(UNITY_BITS) }; SLOTS],
             volume: AtomicU32::new(UNITY_BITS),
             positions: [const { AtomicU64::new(0) }; SLOTS],
@@ -177,6 +178,7 @@ impl Shared {
             tracks: Mutex::new(Default::default()),
             alt_enabled: [const { AtomicBool::new(false) }; SLOTS],
             alt_generation: [const { AtomicU64::new(0) }; SLOTS],
+            meters: [const { AtomicU32::new(0) }; SLOTS],
             eq: Mutex::new([EqSettings::default(); SLOTS]),
             eq_version: AtomicU64::new(0),
         }
@@ -286,8 +288,8 @@ impl Shared {
         self.alt_enabled[slot].store(enabled, Ordering::Relaxed);
     }
 
-    pub fn set_loop_enabled(&self, enabled: bool) {
-        self.loop_enabled.store(enabled, Ordering::Relaxed);
+    pub fn set_loop_enabled(&self, slot: usize, enabled: bool) {
+        self.loop_enabled[slot].store(enabled, Ordering::Relaxed);
     }
 
     pub fn transport(&self) -> Transport {
@@ -295,10 +297,11 @@ impl Shared {
         Transport {
             playing: self.playing.load(Ordering::Relaxed),
             active: self.active.load(Ordering::Relaxed),
-            loop_enabled: self.loop_enabled.load(Ordering::Relaxed),
+            loop_enabled: std::array::from_fn(|i| self.loop_enabled[i].load(Ordering::Relaxed)),
             positions: std::array::from_fn(|i| {
                 self.positions[i].load(Ordering::Relaxed) as f64 / rate
             }),
+            levels: std::array::from_fn(|i| f32::from_bits(self.meters[i].load(Ordering::Relaxed))),
         }
     }
 }
@@ -357,7 +360,7 @@ impl Mixer {
         });
         let playing = shared.playing.load(Ordering::Relaxed);
         let active = shared.active.load(Ordering::Relaxed);
-        let looping = shared.loop_enabled.load(Ordering::Relaxed);
+        let looping: [bool; SLOTS] = std::array::from_fn(|i| shared.loop_enabled[i].load(Ordering::Relaxed));
         let alt_targets: [f32; SLOTS] = std::array::from_fn(|i| {
             let on = shared.alt_enabled[i].load(Ordering::Relaxed) && tracks[i].alt.is_some();
             if on { 1.0 } else { 0.0 }
@@ -370,6 +373,7 @@ impl Mixer {
         });
 
         let master_target = if playing { 1.0 } else { 0.0 };
+        let mut peaks = [0.0f32; SLOTS];
         // Fully faded out and paused: hold position, output silence.
         if !playing && self.master == 0.0 {
             out.fill(0.0);
@@ -401,12 +405,13 @@ impl Mixer {
                             sl += (wl - sl) * m;
                             sr += (wr - sr) * m;
                         }
+                        peaks[i] = peaks[i].max(sl.abs().max(sr.abs()) * self.trims[i] * self.master);
                         l += sl * g;
                         r += sr * g;
                         pos[i] += 1;
                     }
                     let (ls, le) = loops[i];
-                    if looping && le != NONE && pos[i] >= le.min(track.frames) {
+                    if looping[i] && le != NONE && pos[i] >= le.min(track.frames) {
                         pos[i] = ls;
                     }
                 }
@@ -432,6 +437,9 @@ impl Mixer {
         }
         for (slot, p) in shared.positions.iter().zip(pos) {
             slot.store(p, Ordering::Relaxed);
+        }
+        for (meter, peak) in shared.meters.iter().zip(peaks) {
+            meter.store(peak.to_bits(), Ordering::Relaxed);
         }
     }
 }
@@ -466,7 +474,7 @@ pub fn start() -> (Arc<Shared>, Result<u32>) {
                     out_channels: config.channels as usize,
                     fade_step: 1.0 / (FADE_SECONDS * rate as f32),
                     master: 0.0,
-                    gains: [1.0, 0.0],
+                    gains: std::array::from_fn(|i| if i == 0 { 1.0 } else { 0.0 }),
                     trims: [1.0; SLOTS],
                     volume: 1.0,
                     eq: [EqSettings::default(); SLOTS],

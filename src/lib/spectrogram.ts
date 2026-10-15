@@ -3,8 +3,24 @@ import { SPECTROGRAM_FLOOR_DB, SPECTROGRAM_HZ } from "./api";
 /** Displayed dynamic range below the track's ceiling, dB. */
 export const SPECTROGRAM_RANGE_DB = 66;
 
-/** Sequential ramp, dark (quiet) → light (loud), one hue so magnitude reads as lightness. */
-const RAMP = ["#121417", "#0d2747", "#104281", "#1c5cab", "#2a78d6", "#5598e7", "#9ec5f4", "#e6f0fd"];
+/**
+ * Sequential ramp, dark (quiet) → light (loud), inferno-like: lightness still rises steadily, but
+ * the hue also turns (indigo → purple → red → orange → yellow → white), so neighbouring levels are
+ * told apart far more easily than on a single hue: roughly one distinct colour per ~6 dB.
+ */
+const RAMP = [
+  "#0d0e13",
+  "#1b0c41",
+  "#3b0f70",
+  "#641a80",
+  "#8c2981",
+  "#b5367a",
+  "#de4968",
+  "#f66e5c",
+  "#fe9f6d",
+  "#fecf92",
+  "#fcfdbf",
+];
 
 const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
 

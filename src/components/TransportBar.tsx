@@ -4,6 +4,7 @@ import { LevelMeter } from "./LevelMeter";
 import type { Slot } from "../lib/api";
 import type { CurveMode } from "../lib/overlay";
 import type { Display } from "./Waveform";
+import { formatDuration } from "../lib/format";
 
 interface Props {
   playing: boolean;
@@ -13,10 +14,13 @@ interface Props {
   linked: boolean;
   /** Track buttons in lane order: A, B, then the extra tracks. */
   lanes: { slot: Slot; label: string; loaded: boolean; leaving: boolean; role?: "track" | "reference" | null }[];
-  /** Another track can be added (up to H). */
+  /** Length of all the loaded tracks together, when there are several; else null. */
+  totalDuration: number | null;
+  loadedCount: number;
+  /** Another track can be added (up to Z). */
   canAdd: boolean;
   onAdd: () => void;
-  /** Close an extra lane (C–H). */
+  /** Close an extra lane (C–Z). */
   onRemove: (slot: Slot) => void;
   /** Close the last extra lane. */
   onRemoveLast: () => void;
@@ -26,12 +30,12 @@ interface Props {
   onSkip: (seconds: number) => void;
   onSelect: (slot: Slot) => void;
   onToggleLinked: () => void;
+  /** Player mode: tracks play one after another, in lane order. */
+  playerMode: boolean;
+  onTogglePlayerMode: () => void;
   onCurveMode: (mode: CurveMode) => void;
   display: Display;
   onDisplay: (d: Display) => void;
-  /** App-wide output volume, dB (`VOLUME_MIN_DB` = muted). */
-  volumeDb: number;
-  onVolume: (db: number) => void;
 }
 
 /** Bottom of the volume slider, which mutes. */
@@ -50,15 +54,15 @@ export function TransportBar(p: Props) {
   const extras = p.lanes.filter((l) => l.slot > 1 && !l.leaving).length;
   // Narrower buttons past four tracks, but never switched while the pointer is over them, so a
   // button doesn't jump out from under it between two clicks.
-  const wantCompact = p.lanes.length > 4;
+  const wantDensity = p.lanes.length > 10 ? " dense" : p.lanes.length > 4 ? " compact" : "";
   const [hovered, setHovered] = useState(false);
-  const [compact, setCompact] = useState(wantCompact);
-  if (!hovered && compact !== wantCompact) setCompact(wantCompact);
+  const [density, setDensity] = useState(wantDensity);
+  if (!hovered && density !== wantDensity) setDensity(wantDensity);
   return (
     <footer className="transport">
       {/* Playback: how the playhead moves. */}
       <div className="transport-group">
-        <button onClick={p.onToStart} disabled={!any} title="Back to start (Home)">
+        <button onClick={p.onToStart} disabled={!any} title="Back to start (Home, ⌘←)">
           ⏮
         </button>
         <button onClick={() => p.onSkip(-5)} disabled={!any} title="Back 5 s (←)">
@@ -69,6 +73,21 @@ export function TransportBar(p: Props) {
         </button>
         <button onClick={() => p.onSkip(5)} disabled={!any} title="Forward 5 s (→)">
           +5s
+        </button>
+        <button
+          className={`toggle player-mode${p.playerMode ? " on" : ""}`}
+          onClick={p.onTogglePlayerMode}
+          aria-pressed={p.playerMode}
+          aria-label="Player mode"
+          title={
+            p.playerMode
+              ? "Player mode (P): tracks play one after another, in lane order. Click to play them together again"
+              : "Player mode (P): play the tracks one after another, like an ordinary player, instead of all together"
+          }
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M5 6l6 6-6 6M13 6l6 6-6 6" />
+          </svg>
         </button>
       </div>
 
@@ -86,14 +105,14 @@ export function TransportBar(p: Props) {
           <button
             onClick={p.onAdd}
             disabled={!p.canAdd}
-            title={p.canAdd ? "Add another track to switch to (up to H)" : "All eight tracks are in use"}
+            title={p.canAdd ? "Add another track to switch to (up to Z)" : "All 26 tracks are in use"}
             aria-label="Add a track"
           >
             +
           </button>
         </div>
         <div
-          className={`ab-switch${compact ? " compact" : ""}`}
+          className={`ab-switch${density}`}
           role="radiogroup"
           aria-label="Listen to"
           onPointerEnter={() => setHovered(true)}
@@ -108,7 +127,7 @@ export function TransportBar(p: Props) {
                 className={`slot-${label.toLowerCase()}${p.active === slot ? " on" : ""}${role ? ` in-pair role-${role}` : ""}`}
                 onClick={() => p.onSelect(slot)}
                 disabled={!loaded}
-                title={`Listen to ${label} (number-row key ${i + 1}) — Tab switches track ⇄ reference${role === "track" ? " · analysed" : role === "reference" ? " · reference" : ""}`}
+                title={`Listen to ${label} (number-row key ${i + 1}) — Tab switches mix ⇄ reference${role === "track" ? " · mix" : role === "reference" ? " · reference" : ""}`}
               >
                 {label}
                 {loaded && <LevelMeter level={p.levels[slot] ?? 0} />}
@@ -121,6 +140,11 @@ export function TransportBar(p: Props) {
             </div>
           ))}
         </div>
+        {p.totalDuration !== null && (
+          <span className="playlist-total" title={`${p.loadedCount} tracks, ${formatDuration(p.totalDuration)} in all`}>
+            {p.loadedCount} tracks · {formatDuration(p.totalDuration)}
+          </span>
+        )}
       </div>
 
       {/* View: how the lanes are drawn and kept in step. */}
@@ -129,11 +153,12 @@ export function TransportBar(p: Props) {
           <Glide />
           {(
             [
-              ["wave", "Wave", "Waveform: one bar per slice of time, as tall as its peak level"],
+              ["wave", "Wave", "Waveform on a dB scale: a solid body as loud as each slice of time (momentary loudness) under a faint cap at its peak level. The gap between them shows how hard it's limited"],
+              ["peak", "Peak", "Waveform: one bar per slice of time, as tall as its peak level"],
               ["spectrogram", "Spec", "Spectrogram, 30 Hz–20 kHz (log), each track scaled to its own level: dark purple quiet → red → orange → pale yellow loud"],
             ] as [Display, string, string][]
           ).map(([d, label, title]) => (
-            <button key={d} className={p.display === d ? "on" : ""} onClick={() => p.onDisplay(d)} title={`${title} (S toggles)`}>
+            <button key={d} className={p.display === d ? "on" : ""} onClick={() => p.onDisplay(d)} title={`${title} (S: spectrogram ⇄ waveform)`}>
               {label}
             </button>
           ))}
@@ -160,27 +185,7 @@ export function TransportBar(p: Props) {
           Link
         </button>
       </div>
-
-      {/* Output. */}
-      <div className="transport-group">
-        <label className="volume" title="Output volume for every track (double-click for 0 dB)">
-          <span className="control-label">Vol</span>
-          <input
-            type="range"
-            min={VOLUME_MIN_DB}
-            max={0}
-            step={0.5}
-            value={p.volumeDb}
-            onChange={(e) => p.onVolume(Number(e.target.value))}
-            onDoubleClick={() => p.onVolume(0)}
-            // Give focus back so the arrow and space shortcuts keep working on the transport.
-            onPointerUp={(e) => e.currentTarget.blur()}
-          />
-          <span className="volume-value">
-            {p.volumeDb <= VOLUME_MIN_DB ? "Mute" : `${p.volumeDb < 0 ? "−" : ""}${Math.abs(p.volumeDb).toFixed(1)} dB`}
-          </span>
-        </label>
-      </div>
     </footer>
   );
 }
+

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Glide } from "./Glide";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -10,7 +10,8 @@ import { TweenedValue } from "./TweenedValue";
 import type { ABSlot, AnalysisReport, LibraryMatch, LibraryStatus, LibraryTrack, MatchWeights } from "../lib/api";
 import { formatTime } from "../lib/format";
 import { DeezerResults } from "./DeezerResults";
-import { LoadButtons } from "./LoadButtons";
+import { LoadMenu, LoadTargetsContext } from "./LoadMenu";
+import { LibraryStanding } from "./LibraryStanding";
 import { fmt } from "../lib/metrics";
 
 type Focus = "all" | "tonal" | "dynamics" | "stereo";
@@ -34,11 +35,12 @@ interface Props {
   /** Paths of the tracks loaded in A and B. */
   paths: [string | null, string | null];
   status: LibraryStatus | null;
-  onLoad: (side: ABSlot, path: string) => void;
   onRescan: () => void;
+  /** Close the drawer it's shown in (Escape on an empty search, ⌘K). */
+  onClose: () => void;
 }
 
-export function LibraryView({ reports, paths, status, onLoad, onRescan }: Props) {
+export function LibraryView({ reports, paths, status, onRescan, onClose }: Props) {
   const [query, setQuery] = useState("");
   const searching = query.trim() !== "";
 
@@ -50,29 +52,38 @@ export function LibraryView({ reports, paths, status, onLoad, onRescan }: Props)
         className="library-search"
         placeholder="Search your library and Deezer by artist, album or title"
         value={query}
+        autoFocus
         onChange={(e) => setQuery(e.target.value)}
         // Keep typing out of the global shortcuts (space, 1/2, L, M…).
         onKeyDown={(e) => {
           e.stopPropagation();
-          if (e.key === "Escape") setQuery("");
+          if (e.key === "Escape") {
+            if (query) setQuery("");
+            else onClose();
+          }
+          if (e.metaKey && e.key.toLowerCase() === "k") {
+            e.preventDefault();
+            onClose();
+          }
         }}
       />
       {/* Search results and matches fade in when switching between them. */}
       {searching ? (
         <div key="search" className="fade-in library-results">
-          <SearchResults query={query.trim()} paths={paths} status={status} onLoad={onLoad} />
-          <DeezerResults query={query.trim()} paths={paths} onLoad={onLoad} />
+          <SearchResults query={query.trim()} status={status} />
+          <DeezerResults query={query.trim()} />
         </div>
       ) : (
         <div key="matches" className="fade-in library-results">
-          <Matches reports={reports} paths={paths} status={status} onLoad={onLoad} />
+          <LibraryStanding reports={reports} status={status} />
+          <Matches reports={reports} paths={paths} status={status} />
         </div>
       )}
     </>
   );
 }
 
-function SearchResults({ query, paths, status, onLoad }: { query: string; paths: Props["paths"]; status: LibraryStatus | null; onLoad: Props["onLoad"] }) {
+function SearchResults({ query, status }: { query: string; status: LibraryStatus | null }) {
   const [tracks, setTracks] = useState<LibraryTrack[] | null>(null);
   const [showAll, setShowAll] = useState(false);
   useEffect(() => setShowAll(false), [query]);
@@ -102,7 +113,7 @@ function SearchResults({ query, paths, status, onLoad }: { query: string; paths:
       {heading}
       <ol className="matches" ref={list}>
         {(showAll ? tracks : tracks.slice(0, SEARCH_PREVIEW)).map((t, i) => (
-          <TrackRow key={t.path} index={i} track={t} paths={paths} onLoad={onLoad} />
+          <TrackRow key={t.path} index={i} track={t} />
         ))}
       </ol>
       {!showAll && tracks.length > SEARCH_PREVIEW ? (
@@ -117,7 +128,7 @@ function SearchResults({ query, paths, status, onLoad }: { query: string; paths:
   );
 }
 
-function Matches({ reports, paths, status, onLoad }: Omit<Props, "onRescan">) {
+function Matches({ reports, paths, status }: Omit<Props, "onRescan" | "onClose">) {
   const [source, setSource] = useState<ABSlot>(0);
   const [focus, setFocus] = useState<Focus>("all");
   const [matches, setMatches] = useState<LibraryMatch[] | null>(null);
@@ -186,7 +197,7 @@ function Matches({ reports, paths, status, onLoad }: Omit<Props, "onRescan">) {
         <>
           <ol className="matches" ref={list}>
             {matches.map((m, i) => (
-              <TrackRow key={m.path} index={i} track={m} match={m} paths={paths} onLoad={onLoad} />
+              <TrackRow key={m.path} index={i} track={m} match={m} />
             ))}
           </ol>
           <p className="chart-note">
@@ -221,20 +232,16 @@ function LibraryLine({ status, onRescan }: { status: LibraryStatus | null; onRes
   );
 }
 
-/** A library track with load buttons; with `match`, also its similarity scores. */
+/** A library track with a Load menu; with `match`, also its similarity scores. */
 function TrackRow({
   track: t,
   match: m,
   index,
-  paths,
-  onLoad,
 }: {
   track: LibraryTrack;
   match?: LibraryMatch;
   /** Position in the list, for the staggered entrance. */
   index: number;
-  paths: Props["paths"];
-  onLoad: Props["onLoad"];
 }) {
   // Tags when the file has them, else the file name and its folder.
   const parts = t.relPath.split("/");
@@ -243,6 +250,7 @@ function TrackRow({
   const album = t.title ? (t.album ?? "") : parts.slice(0, -1).join(" / ");
   const s = t.summary;
   const copies = t.copies.length;
+  const targets = useContext(LoadTargetsContext);
   const aspects: [string, number | null][] = m
     ? [
         ["tonal", m.tonal],
@@ -252,10 +260,11 @@ function TrackRow({
     : [];
   return (
     <li
-      className={`match${m ? " scored" : ""}`}
+      className={`match draggable${m ? " scored" : ""}`}
       data-key={t.path}
       style={{ "--i": index } as CSSProperties}
-      title={[t.path, ...t.copies].join("\n")}
+      title={`${[t.path, ...t.copies].join("\n")}\nDrag onto a track to load it there`}
+      onPointerDown={(e) => targets?.drag({ path: t.path, title: name, cover: t.cover ? convertFileSrc(t.cover) : null }, e)}
     >
       {m && (
         <span className="match-score">
@@ -285,7 +294,7 @@ function TrackRow({
         </div>
       </div>
       <div className="match-load">
-        <LoadButtons path={t.path} copies={t.copies} paths={paths} onLoad={onLoad} />
+        <LoadMenu path={t.path} copies={t.copies} />
       </div>
     </li>
   );

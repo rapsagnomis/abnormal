@@ -9,14 +9,17 @@ mod fir;
 mod library;
 mod loudness;
 mod peaks;
+mod markers;
 mod player;
-mod sections;
+mod prepared;
+mod psycho;
+mod sessions;
 mod similarity;
+mod standing;
 mod spectrogram;
 mod spectrum;
 mod stereo;
 mod stft;
-mod structure;
 #[cfg(test)]
 mod tests;
 
@@ -57,7 +60,7 @@ struct AppState {
     opened: Mutex<Vec<String>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct TrackInfo {
     slot: usize,
@@ -72,8 +75,8 @@ struct TrackInfo {
     meta: library::TrackMeta,
     /// The cover's colour ("#rrggbb"), for the lane; none without a colourful cover.
     accent: Option<String>,
-    /// The cover's one or two dominant colours, for the song-part palette; empty without.
-    palette: Vec<String>,
+    /// Identity of the decoded audio (`decode::audio_id`): markers follow it across moves.
+    audio_id: String,
 }
 
 #[derive(Serialize)]
@@ -102,51 +105,115 @@ fn audio_status(state: State<'_, AppState>) -> AudioStatus {
     }
 }
 
+/// Versions prepared ahead of switching to them (see `prepared.rs`).
+type Versions = prepared::Prepared<TrackInfo>;
+
+/// Decode a file, resample it for playback (at `device_rate`; none without a device) and gather
+/// what the UI shows of it. Its `slot` is set by whoever loads it.
+fn decode_track(path: &str, device_rate: u32, library: &Library) -> Result<prepared::Decoded<TrackInfo>, String> {
+    let path_buf = PathBuf::from(path);
+    let audio = decode::decode_file(&path_buf).map_err(|e| format!("{e:#}"))?;
+    // The audio's identity (~0.1 s for a song) is hashed while the playback copy is resampled.
+    let (audio_id, buffer) = std::thread::scope(|scope| {
+        let id = scope.spawn(|| decode::audio_id(&audio));
+        let buffer = (device_rate > 0).then(|| PlaybackBuffer::new(&audio, device_rate));
+        (id.join().unwrap(), buffer)
+    });
+    let buffer = buffer.transpose().map_err(|e| format!("{e:#}"))?.map(Arc::new);
+    let meta = library.track_meta(&path_buf);
+    let accent = meta.cover.as_deref().and_then(|c| accent::cover_accent(std::path::Path::new(c)));
+    let info = TrackInfo {
+        slot: 0,
+        name: path_buf.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_owned()),
+        path: path.to_owned(),
+        sample_rate: audio.sample_rate,
+        channels: audio.channels.len(),
+        duration: audio.duration(),
+        peaks: peaks::compute_peaks(&audio, PEAK_BUCKETS),
+        meta,
+        accent,
+        audio_id,
+    };
+    Ok(prepared::Decoded { audio: Arc::new(audio), buffer, info })
+}
+
+/// Load a file into a slot, playing from `at` seconds (0 by default). A prepared version only
+/// swaps buffers; anything else is decoded first.
 #[tauri::command]
 async fn load_track(
     slot: usize,
     path: String,
+    at: Option<f64>,
     state: State<'_, AppState>,
     library: State<'_, Arc<Library>>,
+    versions: State<'_, Arc<Versions>>,
 ) -> Result<TrackInfo, String> {
     check_slot(slot)?;
     let player = state.player.clone();
     let library = library.inner().clone();
+    let versions = versions.inner().clone();
     let tracks = state.tracks.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let path_buf = PathBuf::from(&path);
-        let audio = decode::decode_file(&path_buf).map_err(|e| format!("{e:#}"))?;
-        let device_rate = player.device_rate.load(std::sync::atomic::Ordering::Relaxed);
-        if device_rate > 0 {
-            let buffer = PlaybackBuffer::new(&audio, device_rate).map_err(|e| format!("{e:#}"))?;
-            player.set_track(slot, Some(buffer));
+        let stamp = prepared::stamp_of(std::path::Path::new(&path)).ok_or_else(|| format!("Can't open {path}"))?;
+        let decoded = match versions.decoded(&path) {
+            Some(d) => d,
+            None => {
+                let device_rate = player.device_rate.load(Ordering::Relaxed);
+                let d = decode_track(&path, device_rate, &library)?;
+                versions.keep(&path, stamp, Some(&d), None);
+                d
+            }
+        };
+        if decoded.buffer.is_some() {
+            player.set_shared_track(slot, decoded.buffer.clone(), at.unwrap_or(0.0).min(decoded.info.duration));
         }
-        let info = TrackInfo {
-            slot,
-            name: path_buf
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.clone()),
-            path,
-            sample_rate: audio.sample_rate,
-            channels: audio.channels.len(),
-            duration: audio.duration(),
-            peaks: peaks::compute_peaks(&audio, PEAK_BUCKETS),
-            meta: library.track_meta(&path_buf),
-            accent: None,
-            palette: Vec::new(),
-        };
-        let colors = info.meta.cover.as_deref().and_then(|c| accent::cover_colors(std::path::Path::new(c)));
-        let info = match colors {
-            Some(c) => TrackInfo { accent: Some(c.accent), palette: c.palette, ..info },
-            None => info,
-        };
-        tracks.lock().unwrap()[slot] = Some(Arc::new(audio));
-        Ok(info)
+        tracks.lock().unwrap()[slot] = Some(decoded.audio.clone());
+        versions.set_slot(slot, Some((path, stamp)));
+        Ok(TrackInfo { slot, ..decoded.info })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Keep these files prepared for switching to (every version of the songs with several), and
+/// prepare the ones that aren't yet in the background, one at a time, sending `version-prepared`
+/// (the path) as each is ready. Returns the ones already ready.
+#[tauri::command]
+fn prepare_versions(paths: Vec<String>, app: tauri::AppHandle, versions: State<'_, Arc<Versions>>) -> Vec<String> {
+    versions.want(paths);
+    if !versions.working.swap(true, Ordering::SeqCst) {
+        let versions = versions.inner().clone();
+        std::thread::spawn(move || prepare_worker(&versions, &app));
+    }
+    versions.ready()
+}
+
+fn prepare_worker(versions: &Versions, app: &tauri::AppHandle) {
+    loop {
+        let Some((path, stamp)) = versions.next() else {
+            versions.working.store(false, Ordering::SeqCst);
+            // Something wanted between the last look and the flag going down would wait forever.
+            if versions.next().is_none() || versions.working.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            continue;
+        };
+        let device_rate = app.state::<AppState>().player.device_rate.load(Ordering::Relaxed);
+        let library = app.state::<Arc<Library>>().inner().clone();
+        let decoded = versions.decoded(&path).map_or_else(|| decode_track(&path, device_rate, &library), Ok);
+        let report = decoded.as_ref().map_err(String::clone).and_then(|d| {
+            let report = analyze_range(&d.audio, 0, d.audio.frames(), true, true)?;
+            serde_json::to_string(&report).map_err(|e| e.to_string())
+        });
+        match (decoded, report) {
+            (Ok(d), Ok(report)) => {
+                versions.keep(&path, stamp, Some(&d), Some(report.into()));
+                let _ = app.emit("version-prepared", &path);
+            }
+            _ => versions.fail(&path, stamp),
+        }
+    }
 }
 
 /// Run `f` on a loaded track's decoded audio off the async runtime.
@@ -180,32 +247,48 @@ struct AnalysisReport {
     stereo: StereoReport,
     /// Fingerprint for matching against the library.
     features: Features,
+    /// Sharpness and roughness (psychoacoustic models); not computed when indexing the library.
+    psycho: Option<psycho::PsychoStats>,
 }
 
 /// Full analysis of frames `start..end`; shared by the `analyze` command and library indexing.
-fn analyze_range(audio: &AudioData, start: usize, end: usize, curves: bool) -> Result<AnalysisReport, String> {
+/// `psycho` adds sharpness and roughness (about a second for a song).
+fn analyze_range(audio: &AudioData, start: usize, end: usize, curves: bool, psycho: bool) -> Result<AnalysisReport, String> {
     let loudness = loudness::analyze(audio, start, end, curves).map_err(|e| format!("{e:#}"))?;
     let start_s = start as f64 / audio.sample_rate as f64;
     let dynamics = dynamics::analyze(audio, start, end, &loudness.blocks, start_s, curves);
     let spectrum = spectrum::analyze(audio, start, end, loudness.stats.integrated);
     let stereo = stereo::analyze(audio, start, end, start_s, curves);
     let features = Features::new(&loudness.stats, &dynamics.stats, &spectrum, &stereo.stats);
-    Ok(AnalysisReport { loudness, dynamics, spectrum, stereo, features })
+    let psycho = psycho.then(|| psycho::analyze(audio, start, end, loudness.stats.integrated));
+    Ok(AnalysisReport { loudness, dynamics, spectrum, stereo, features, psycho })
 }
 
-/// Loudness, dynamics, tonal balance and stereo image of a whole track (`range = None`) or a time range in seconds.
+/// Loudness, dynamics, tonal balance and stereo image of a whole track (`range = None`) or a time
+/// range in seconds, as JSON. A prepared version's whole-track analysis comes back at once.
 #[tauri::command]
 async fn analyze(
     slot: usize,
     range: Option<(f64, f64)>,
     curves: bool,
     state: State<'_, AppState>,
-) -> Result<AnalysisReport, String> {
-    with_audio(&state, slot, move |audio| {
+    versions: State<'_, Arc<Versions>>,
+) -> Result<tauri::ipc::Response, String> {
+    check_slot(slot)?;
+    let whole = range.is_none() && curves;
+    if whole && let Some(report) = versions.slot_report(slot) {
+        return Ok(tauri::ipc::Response::new(report.to_string()));
+    }
+    let json = with_audio(&state, slot, move |audio| {
         let (start, end) = to_frame_range(audio, range);
-        analyze_range(audio, start, end, curves)
+        let report = analyze_range(audio, start, end, curves, true)?;
+        serde_json::to_string(&report).map_err(|e| e.to_string())
     })
-    .await
+    .await?;
+    if whole {
+        versions.keep_slot_report(slot, json.as_str().into());
+    }
+    Ok(tauri::ipc::Response::new(json))
 }
 
 /// Waveform peaks for a time range, used when zoomed in beyond the overview resolution.
@@ -287,12 +370,6 @@ async fn spectrogram(
         Ok(tauri::ipc::Response::new(spectrogram::compute(audio, s, e, columns, rows)))
     })
     .await
-}
-
-/// Song sections of a whole track, labelled so that sections that sound alike share a label.
-#[tauri::command]
-async fn sections(slot: usize, state: State<'_, AppState>) -> Result<Vec<sections::Section>, String> {
-    with_audio(&state, slot, |audio| Ok(sections::analyze(audio, 0, audio.frames()))).await
 }
 
 /// Per-band share of the moment's energy over time, used to find where each EQ move matters.
@@ -418,61 +495,71 @@ fn similar_tracks(
     library.similar(&features, &exclude, weights, limit)
 }
 
+/// Where the given tracks (mix, reference) sit among the library's tracks, per mix quality; with
+/// `near`, among the `near` library tracks closest in sound to the first.
+#[tauri::command]
+fn library_standing(tracks: Vec<Option<standing::Input>>, near: Option<usize>, library: State<'_, Arc<Library>>) -> Vec<standing::Standing> {
+    library.standing(&tracks, near)
+}
+
 /// Library tracks whose path contains every word of `query`.
 #[tauri::command]
 fn search_library(query: String, limit: usize, library: State<'_, Arc<Library>>) -> Vec<LibraryTrack> {
     library.search(&query, limit)
 }
 
-/// Whether the song-structure model is set up, and install progress.
+/// A track's markers (empty if it has none), found by its audio, else by its path (see `markers.rs`).
 #[tauri::command]
-fn structure_status(engine: State<'_, Arc<structure::Engine>>) -> structure::SetupStatus {
-    engine.status()
+fn markers(audio_id: String, path: String, store: State<'_, Arc<markers::Markers>>) -> Vec<markers::Marker> {
+    store.get(&audio_id, &path)
 }
 
-/// Set up the song-structure model's Python environment in the background, emitting
-/// `structure-setup` as it goes.
+/// Replace a track's markers.
 #[tauri::command]
-fn structure_install(app: tauri::AppHandle, engine: State<'_, Arc<structure::Engine>>) {
-    let engine = engine.inner().clone();
-    std::thread::spawn(move || {
-        engine.install(&|status| {
-            let _ = app.emit("structure-setup", status);
-        })
-    });
-}
-
-/// The structure of a file if it's been analysed; otherwise `None`, and it is queued for
-/// analysis (when the model is set up), with the result sent as a `structure` event.
-#[tauri::command]
-fn song_structure(path: String, app: tauri::AppHandle, engine: State<'_, Arc<structure::Engine>>) -> Option<structure::Structure> {
-    let path = PathBuf::from(path);
-    if let Some(found) = engine.cached(&path) {
-        return Some(found);
-    }
-    engine.request(
-        path,
-        Arc::new(move |outcome| {
-            let _ = app.emit("structure", outcome);
-        }),
-    );
-    None
-}
-
-/// Keep the user's corrected song parts for a file (they win over the detected ones).
-#[tauri::command]
-fn save_structure_edit(
+fn save_markers(
+    audio_id: String,
     path: String,
-    segments: Vec<structure::Segment>,
-    engine: State<'_, Arc<structure::Engine>>,
-) -> Result<structure::Structure, String> {
-    engine.save_edit(&PathBuf::from(path), segments)
+    markers: Vec<markers::Marker>,
+    store: State<'_, Arc<markers::Markers>>,
+) -> Result<(), String> {
+    store.set(&audio_id, &path, markers)
 }
 
-/// Forget the user's corrections for a file, returning the detected structure.
+/// Save the lanes (in order, each with its versions) as a session file, and remember it as recent.
 #[tauri::command]
-fn reset_structure_edit(path: String, engine: State<'_, Arc<structure::Engine>>) -> Option<structure::Structure> {
-    engine.reset_edit(&PathBuf::from(path))
+fn save_session(path: String, lanes: Vec<sessions::Lane>, recents: State<'_, Arc<sessions::Recents>>) -> Result<sessions::Session, String> {
+    let session = sessions::write(&PathBuf::from(path), &lanes)?;
+    recents.touch(&session);
+    Ok(session)
+}
+
+/// Read a session file (its lanes, in order), and remember it as recent.
+#[tauri::command]
+fn open_session(path: String, recents: State<'_, Arc<sessions::Recents>>) -> Result<sessions::Session, String> {
+    let session = sessions::read(&PathBuf::from(path))?;
+    recents.touch(&session);
+    Ok(session)
+}
+
+/// Recently saved or opened sessions, most recent first.
+#[tauri::command]
+fn recent_sessions(recents: State<'_, Arc<sessions::Recents>>) -> Vec<sessions::RecentSession> {
+    recents.list()
+}
+
+#[tauri::command]
+fn clear_recent_sessions(recents: State<'_, Arc<sessions::Recents>>) {
+    recents.clear();
+}
+
+/// Write the notes recap (Markdown) chosen in a save dialog.
+#[tauri::command]
+fn write_notes(path: String, contents: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")) {
+        return Err("Notes are written as a .md file".into());
+    }
+    std::fs::write(path, contents).map_err(|e| e.to_string())
 }
 
 /// Deezer search and downloads through a headless Deemix server (see `deemix.rs`).
@@ -585,16 +672,31 @@ fn set_trims(db: [f64; SLOTS], state: State<'_, AppState>) {
     }
 }
 
+/// Player mode: tracks play one after another in `order` (lane order) instead of together.
+#[tauri::command]
+fn set_player_mode(on: bool, order: Vec<usize>, state: State<'_, AppState>) {
+    state.player.set_player_mode(on, &order);
+}
+
+/// Per track: limit it like Spotify's Loud setting (see `player::Limiter`).
+#[tauri::command]
+fn set_limiters(on: [bool; player::SLOTS], state: State<'_, AppState>) {
+    for (slot, on) in on.into_iter().enumerate() {
+        state.player.set_limit(slot, on);
+    }
+}
+
 #[tauri::command]
 fn set_volume(gain: f64, state: State<'_, AppState>) {
     state.player.set_volume(gain);
 }
 
 #[tauri::command]
-fn unload_track(slot: usize, state: State<'_, AppState>) -> Result<(), String> {
+fn unload_track(slot: usize, state: State<'_, AppState>, versions: State<'_, Arc<Versions>>) -> Result<(), String> {
     check_slot(slot)?;
     state.player.set_track(slot, None);
     state.tracks.lock().unwrap()[slot] = None;
+    versions.set_slot(slot, None);
     Ok(())
 }
 
@@ -660,8 +762,10 @@ pub fn run() {
             let library = Arc::new(Library::new(root.clone(), db_path));
             let deemix = Deemix::new(&app.path().home_dir()?, app.path().app_data_dir()?.join("deemix"), root);
             app.manage(Arc::new(Downloads { deemix, watching: AtomicBool::new(false) }));
-            app.manage(Arc::new(structure::Engine::new(app.path().home_dir()?, app.path().app_data_dir()?.join("allin1"))));
             app.manage(library.clone());
+            app.manage(Arc::new(markers::Markers::new(app.path().app_data_dir()?.join("markers.json"))));
+            app.manage(Arc::new(Versions::new()));
+            app.manage(Arc::new(sessions::Recents::new(app.path().app_data_dir()?.join("recent_sessions.json"))));
             // Pick up tracks added since the last run.
             let handle = app.handle().clone();
             std::thread::spawn(move || index_library(&library, &handle));
@@ -680,6 +784,8 @@ pub fn run() {
             analyze,
             range_peaks,
             set_trims,
+            set_limiters,
+            set_player_mode,
             set_volume,
             set_eq,
             match_eq,
@@ -688,23 +794,26 @@ pub fn run() {
             export_track,
             spectrogram,
             live_spectrum,
-            sections,
             band_activity,
             pro_q_template,
             library_status,
             rescan_library,
             similar_tracks,
+            library_standing,
             search_library,
             deezer_connect,
             deezer_login,
             deezer_search,
             deezer_download,
             deezer_queue,
-            structure_status,
-            structure_install,
-            song_structure,
-            save_structure_edit,
-            reset_structure_edit,
+            markers,
+            save_markers,
+            save_session,
+            prepare_versions,
+            open_session,
+            recent_sessions,
+            clear_recent_sessions,
+            write_notes,
             transport,
         ])
         .build(tauri::generate_context!())

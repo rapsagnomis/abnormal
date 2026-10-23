@@ -11,7 +11,6 @@ export function Glide() {
   useLayoutEffect(() => {
     const pill = ref.current!;
     const group = pill.parentElement!;
-    group.classList.add("has-glide");
     let shown = false;
     const place = (animate: boolean) => {
       const on = group.querySelector<HTMLElement>("button.on");
@@ -42,7 +41,6 @@ export function Glide() {
     return () => {
       mo.disconnect();
       ro.disconnect();
-      group.classList.remove("has-glide");
     };
   }, []);
   return <span ref={ref} className="glide" aria-hidden="true" />;

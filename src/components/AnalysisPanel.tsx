@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Glide } from "./Glide";
-import type { ABSlot, AnalysisReport, EqFilter, LibraryStatus, MatchReport, Region, SongStructure, StructureSetup } from "../lib/api";
+import type { AnalysisReport, EqFilter, MatchReport, Region } from "../lib/api";
 import { curveOf, describe, formatGain, formatHz, isSide, isWidth, midSideCurves, typeLabel } from "../lib/eq";
 import { formatTime } from "../lib/format";
 import { FADE_IN, flash } from "../lib/motion";
@@ -13,10 +13,6 @@ import { HeadlineCards } from "./HeadlineCards";
 import { TweenedValue } from "./TweenedValue";
 import { Goniometer } from "./Goniometer";
 import { HistogramChart } from "./HistogramChart";
-import { LibraryView } from "./LibraryView";
-import { LoadNewContext } from "./LoadButtons";
-import type { LoadNew } from "./LoadButtons";
-import { PartsTable } from "./PartsTable";
 import { ProQExport } from "./ProQExport";
 
 export type Scope = "full" | "selection";
@@ -29,7 +25,6 @@ const TABS: [Tab, string][] = [
   ["dynamics", "Dynamics"],
   ["tonal", "Tonal"],
   ["stereo", "Stereo"],
-  ["library", "Library"],
 ];
 
 interface Props {
@@ -56,7 +51,6 @@ interface Props {
   fullRendering: boolean;
   /** Paths of the loaded tracks. */
   paths: [string | null, string | null];
-  library: LibraryStatus | null;
   /** Which suggested EQ moves are switched on (index-aligned with `eqMoves`). */
   eqActive: boolean[];
   /** Suggested EQ is being auditioned on the track's playback. */
@@ -70,19 +64,8 @@ interface Props {
   onEqAudition: (on: boolean) => void;
   onListen: (region: Region) => void;
   onScope: (scope: Scope) => void;
-  /** Load into the track (0) or the reference (1). */
-  onLoad: (side: ABSlot, path: string) => void;
-  onRescan: () => void;
-  /** Whole-track reports, whatever is being measured. */
-  fullReports: [AnalysisReport | null, AnalysisReport | null];
-  structures: [SongStructure | null, SongStructure | null];
-  structurePending: [boolean, boolean];
-  structureSetup: StructureSetup | null;
-  /** Load a library or Deezer track into a new/empty lane. */
-  loadNew: LoadNew;
   /** What's playing right now (the track listened to), for the live curve on the spectrum chart. */
   live: { label: string; values: number[] } | null;
-  onStructureInstall: () => void;
 }
 
 
@@ -104,7 +87,6 @@ export function AnalysisPanel(p: Props) {
 
   return (
     <PairContext.Provider value={p.pair}>
-    <LoadNewContext.Provider value={p.loadNew}>
     <aside className="panel" ref={panel} style={pairColors(p.pair.labels)}>
       <div className="tabs" role="tablist">
         {TABS.map(([t, name]) => (
@@ -143,14 +125,8 @@ export function AnalysisPanel(p: Props) {
 
       {/* Each tab's content fades in when switching to it. */}
       <div key={p.tab} className="tab-body fade-in">
-      {p.tab === "library" ? (
-        <LibraryView reports={p.reports} paths={p.paths} status={p.library} onLoad={p.onLoad} onRescan={p.onRescan} />
-      ) : (
-        <>
-          <HeadlineCards tab={p.tab} reports={p.reports} pending={p.pending} loaded={p.loaded} />
-          <MetricsTable sections={SECTIONS[p.tab]} {...p} />
-        </>
-      )}
+      <HeadlineCards tab={p.tab} reports={p.reports} pending={p.pending} loaded={p.loaded} />
+      <MetricsTable sections={SECTIONS[p.tab]} {...p} />
 
       {p.tab === "dynamics" && (
         <>
@@ -179,14 +155,6 @@ export function AnalysisPanel(p: Props) {
               histogram: r?.dynamics.crestHistogram ?? null,
               marker: r?.dynamics.stats.crestShortMedian ?? null,
             }))}
-          />
-          <PartsTable
-            structures={p.structures}
-            fullReports={p.fullReports}
-            paths={p.paths}
-            pending={p.structurePending}
-            setup={p.structureSetup}
-            onInstall={p.onStructureInstall}
           />
         </>
       )}
@@ -279,7 +247,6 @@ export function AnalysisPanel(p: Props) {
       )}
       </div>
     </aside>
-    </LoadNewContext.Provider>
     </PairContext.Provider>
   );
 }
@@ -357,7 +324,7 @@ function EqView(p: EqViewProps) {
     labels: [a, b],
   } = usePair();
   if (!p.hasBoth) {
-    return <p className="chart-note">Load a track and a reference to get EQ suggestions.</p>;
+    return <p className="chart-note">Load a mix and a reference to get EQ suggestions.</p>;
   }
   const loudestToggle = (
     <label className="eq-option" title="Measure both tracks only over their louder-than-average stretches (as Matchering does), so quiet intros and breakdowns don't sway the match">

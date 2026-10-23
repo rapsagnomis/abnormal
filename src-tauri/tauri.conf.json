@@ -33,7 +33,17 @@
     "fileAssociations": [
       { "ext": ["wav", "wave"], "name": "WAV audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["com.microsoft.waveform-audio"] },
       { "ext": ["flac"], "name": "FLAC audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["org.xiph.flac"] },
-      { "ext": ["mp3"], "name": "MP3 audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.mp3"] }
+      { "ext": ["mp3"], "name": "MP3 audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.mp3"] },
+      { "ext": ["aif", "aiff", "aifc"], "name": "AIFF audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.aiff-audio", "public.aifc-audio"] },
+      { "ext": ["m4a"], "name": "MPEG-4 audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["com.apple.m4a-audio"] },
+      { "ext": ["aac"], "name": "AAC audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.aac-audio"] },
+      {
+        "ext": ["abnormal"],
+        "name": "(a/b)normal session",
+        "role": "Editor",
+        "rank": "Owner",
+        "exportedType": { "identifier": "com.simongaspar.soniccompare.session", "conformsTo": ["public.json"] }
+      }
     ],
     "icon": [
       "icons/32x32.png",

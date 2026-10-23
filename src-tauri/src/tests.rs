@@ -90,15 +90,6 @@ fn cover_accent_picks_the_vivid_dominant_hue() {
     px.extend(vec![[30u8, 90, 240]; 300]);
     let (r, _, b) = hue_of(&accent_of(px.into_iter()).unwrap());
     assert!(b > r + 60, "blue accent, got {r},_,{b}");
-    // Both dominant hues come back for the part palette (dominance weighs vividness as well as
-    // area, so the order isn't checked): one warm (the brown), one blue.
-    let mut px = vec![[110u8, 80, 50]; 600];
-    px.extend(vec![[30u8, 90, 240]; 300]);
-    let palette = crate::accent::colors_of(px.into_iter()).unwrap().palette;
-    assert_eq!(palette.len(), 2);
-    let hues: Vec<_> = palette.iter().map(|c| hue_of(c)).collect();
-    assert!(hues.iter().any(|&(r, g, b)| r > g && g > b), "a warm (brown) colour: {palette:?}");
-    assert!(hues.iter().any(|&(r, _, b)| b > r + 60), "a blue colour: {palette:?}");
     // Black and white: no colour.
     let px = (0..1000).map(|i| if i % 2 == 0 { [0u8, 0, 0] } else { [255u8, 255, 255] });
     assert!(accent_of(px).is_none());
@@ -222,6 +213,12 @@ fn bench_real_file() {
     let audio = decode_file(std::path::Path::new(&path)).unwrap();
     let decode = t.elapsed();
     let t = std::time::Instant::now();
+    let psycho = crate::psycho::analyze(&audio, 0, audio.frames(), crate::loudness::analyze(&audio, 0, audio.frames(), false).unwrap().stats.integrated);
+    println!("psychoacoustics {psycho:.2?} in {:.2?}", t.elapsed());
+    let t = std::time::Instant::now();
+    let id = crate::decode::audio_id(&audio);
+    println!("audio id {id} in {:.2?}", t.elapsed());
+    let t = std::time::Instant::now();
     compute_peaks(&audio, 8192);
     let peaks = t.elapsed();
     let t = std::time::Instant::now();
@@ -237,6 +234,230 @@ fn bench_real_file() {
         r.stats,
         d.stats
     );
+}
+
+/// Spotify Loud preview limiter (`player::Limiter`).
+mod limiter {
+    use crate::player::{LIMIT_CEILING_DB, Limiter};
+
+    const RATE: f32 = 48000.0;
+
+    fn run(amp: f32) -> f32 {
+        let mut lim = Limiter::new(RATE);
+        let mut peak = 0.0f32;
+        for i in 0..RATE as usize {
+            let x = amp * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / RATE).sin();
+            let (l, r) = lim.process(x, x);
+            assert_eq!(l, r);
+            // After it has settled (half a second).
+            if i > RATE as usize / 2 {
+                peak = peak.max(l.abs());
+            }
+        }
+        20.0 * peak.log10()
+    }
+
+    #[test]
+    fn holds_a_hot_signal_at_the_ceiling() {
+        // +6 dBFS sine: brought down to just above −1 dBFS. With a 5 ms attack and no look-ahead,
+        // each sine peak gets through a little (about 0.8 dB here).
+        let peak = run(2.0);
+        assert!(peak > LIMIT_CEILING_DB - 0.05 && peak < 0.0, "{peak:.2} dB");
+    }
+
+    #[test]
+    fn leaves_signal_below_the_ceiling_alone() {
+        let peak = run(0.5);
+        assert!((peak - 20.0 * 0.5f32.log10()).abs() < 1e-3, "{peak:.3} dB");
+    }
+}
+
+/// Player mode in the mixer (`player::Mixer`), without an audio device.
+mod player_mode {
+    use std::sync::Arc;
+
+    use crate::decode::AudioData;
+    use crate::player::{Mixer, PlaybackBuffer, Shared};
+
+    const RATE: u32 = 48000;
+
+    /// A constant-level mono track: its level tells which track is heard.
+    fn track(level: f32, frames: usize) -> PlaybackBuffer {
+        PlaybackBuffer::new(&AudioData { sample_rate: RATE, channels: vec![vec![level; frames]] }, RATE).unwrap()
+    }
+
+    #[test]
+    fn plays_tracks_one_after_another() {
+        let shared = Arc::new(Shared::new());
+        shared.device_rate.store(RATE, std::sync::atomic::Ordering::Relaxed);
+        // A (0.1, 0.75 s), an empty lane, then C in slot 5 (0.3); B (0.2) is left out of the order.
+        shared.set_track(0, Some(track(0.1, RATE as usize * 3 / 4)));
+        shared.set_track(1, Some(track(0.2, RATE as usize)));
+        shared.set_track(5, Some(track(0.3, RATE as usize / 2)));
+        shared.set_player_mode(true, &[0, 2, 5]);
+        shared.set_active(0);
+        shared.set_playing(true);
+        let mut mixer = Mixer::new(shared.clone(), 1, RATE);
+
+        let mut out = vec![0.0f32; RATE as usize / 2];
+        mixer.render(&mut out);
+        let t = shared.transport();
+        // Halfway through A: B (not in the order) and C (not heard) haven't moved.
+        assert_eq!(t.active, 0);
+        assert!((t.positions[0] - 0.5).abs() < 1e-3 && t.positions[1] == 0.0 && t.positions[5] == 0.0, "{:?}", t.positions);
+        assert!((out[out.len() - 1] - 0.1).abs() < 1e-4);
+
+        // A ends 0.25 s later: C takes over from its start, skipping the empty lane.
+        mixer.render(&mut out);
+        let t = shared.transport();
+        assert_eq!(t.active, 5);
+        assert!((t.positions[5] - 0.25).abs() < 1e-3, "{:?}", t.positions);
+        assert!((out[out.len() - 1] - 0.3).abs() < 1e-3, "{}", out[out.len() - 1]);
+
+        // C is the last: playback stops when it ends.
+        mixer.render(&mut out);
+        mixer.render(&mut out);
+        assert!(!shared.transport().playing);
+    }
+
+    /// Replacing a playing track (another version) crossfades from the old one, which carries on
+    /// from where it was: no jump at the swap, the new level within `SWAP_SECONDS`.
+    #[test]
+    fn replacing_a_playing_track_crossfades() {
+        let shared = Arc::new(Shared::new());
+        shared.device_rate.store(RATE, std::sync::atomic::Ordering::Relaxed);
+        shared.set_track(0, Some(track(0.1, RATE as usize)));
+        shared.set_playing(true);
+        let mut mixer = Mixer::new(shared.clone(), 1, RATE);
+        let mut out = vec![0.0f32; RATE as usize / 4];
+        mixer.render(&mut out);
+        assert!((out[out.len() - 1] - 0.1).abs() < 1e-4);
+
+        shared.set_shared_track(0, Some(Arc::new(track(0.3, RATE as usize))), 0.25);
+        let mut out = vec![0.0f32; RATE as usize / 10];
+        mixer.render(&mut out);
+        // From the old level, rising smoothly (at most one fade step a sample), to the new one.
+        assert!((out[0] - 0.1).abs() < 0.01, "starts at the old level: {}", out[0]);
+        let step = 0.2 / (0.06 * RATE as f32);
+        assert!(out.windows(2).all(|w| (w[1] - w[0]).abs() <= step * 1.01 + 1e-6), "no jump");
+        assert!((out[out.len() - 1] - 0.3).abs() < 1e-4, "ends at the new level: {}", out[out.len() - 1]);
+        assert!((shared.transport().positions[0] - 0.35).abs() < 1e-3, "the new one plays from the swap time");
+    }
+
+    #[test]
+    fn without_player_mode_tracks_move_together() {
+        let shared = Arc::new(Shared::new());
+        shared.device_rate.store(RATE, std::sync::atomic::Ordering::Relaxed);
+        shared.set_track(0, Some(track(0.1, RATE as usize)));
+        shared.set_track(1, Some(track(0.2, RATE as usize)));
+        shared.set_playing(true);
+        let mut mixer = Mixer::new(shared.clone(), 1, RATE);
+        mixer.render(&mut vec![0.0f32; RATE as usize / 4]);
+        let t = shared.transport();
+        assert!((t.positions[0] - 0.25).abs() < 1e-3 && (t.positions[1] - 0.25).abs() < 1e-3);
+    }
+}
+
+/// Psychoacoustic models against their references: ISO 532-1 test signals for loudness, the
+/// definition of 1 acum for sharpness, and Daniel & Weber's reference sound for 1 asper.
+mod psychoacoustics {
+    use std::f64::consts::PI;
+
+    use crate::psycho::{RoughnessModel, loudness, sharpness, third_octave_levels_of};
+
+    const FS: f64 = 48000.0;
+
+    fn close(value: f64, expected: f64, rtol: f64, atol: f64) -> bool {
+        (value - expected).abs() <= atol + rtol * expected.abs()
+    }
+
+    /// A sine at `db` SPL (RMS), in pascals.
+    fn tone(freq: f64, db: f64, secs: f64) -> Vec<f64> {
+        let amp = 2e-5 * 10f64.powf(db / 20.0) * 2f64.sqrt();
+        (0..(secs * FS) as usize).map(|i| amp * (2.0 * PI * freq * i as f64 / FS).sin()).collect()
+    }
+
+    /// ISO 532-1 annex B, test signal 1: given 1/3-octave levels (free field).
+    #[test]
+    fn iso_test_signal_1_loudness() {
+        let levels = [
+            -60.0, -60.0, 78.0, 79.0, 89.0, 72.0, 80.0, 89.0, 75.0, 87.0, 85.0, 79.0, 86.0, 80.0, 71.0, 70.0, 72.0, 71.0, 72.0, 74.0,
+            69.0, 65.0, 67.0, 77.0, 68.0, 58.0, 45.0, 30.0,
+        ];
+        let (n, specific) = loudness(&levels);
+        assert!(close(n, 83.296, 0.05, 0.1), "N = {n:.3} sone");
+        // Specific loudness at a few points of the standard's table (sone/Bark, every 2 Bark).
+        let iso = [(0, 5.3272), (20, 7.5599), (40, 6.4327), (60, 3.6218), (80, 2.5232), (100, 2.3498), (120, 2.5533), (140, 2.737), (160, 2.281), (180, 2.6301), (200, 3.3234), (220, 1.3555)];
+        for (k, expected) in iso {
+            assert!(close(specific[k], expected, 0.05, 0.1), "N'({:.1}) = {:.4}, ISO {expected}", (k + 1) as f64 * 0.1, specific[k]);
+        }
+    }
+
+    /// ISO 532-1 test signal 3: 1 kHz at 60 dB, 4.019 sone; and loudness doubling per +10 dB.
+    #[test]
+    fn one_khz_tone_loudness() {
+        let (n, specific) = loudness(&third_octave_levels_of(&tone(1000.0, 60.0, 1.0), FS));
+        assert!(close(n, 4.019, 0.05, 0.1), "N = {n:.3} sone");
+        assert!(close(specific[80], 1.2273, 0.05, 0.1), "N'(8.1) = {:.4}", specific[80]);
+        let (n70, _) = loudness(&third_octave_levels_of(&tone(1000.0, 70.0, 1.0), FS));
+        assert!((n70 / n - 2.0).abs() < 0.2, "{n70:.2} vs {n:.2}");
+    }
+
+    /// Deterministic noise in pascals with a flat spectrum between `lo` and `hi` Hz, at `db` SPL:
+    /// sines on every 1 Hz with pseudo-random phases.
+    fn band_noise(lo: f64, hi: f64, db: f64, secs: f64) -> Vec<f64> {
+        let len = (secs * FS) as usize;
+        let mut out = vec![0.0; len];
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut f = lo.ceil();
+        while f <= hi {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let phase = (seed % 10_000) as f64 / 10_000.0 * 2.0 * PI;
+            for (i, o) in out.iter_mut().enumerate() {
+                *o += (2.0 * PI * f * i as f64 / FS + phase).sin();
+            }
+            f += 1.0;
+        }
+        let rms = (out.iter().map(|v| v * v).sum::<f64>() / len as f64).sqrt();
+        let target = 2e-5 * 10f64.powf(db / 20.0);
+        out.iter().map(|v| v * target / rms).collect()
+    }
+
+    /// DIN 45692 defines 1 acum as critical-band-wide noise at 1 kHz, 60 dB; higher bands are sharper.
+    #[test]
+    fn sharpness_of_reference_noise_is_one_acum() {
+        let measure = |lo, hi| {
+            let (n, specific) = loudness(&third_octave_levels_of(&band_noise(lo, hi, 60.0, 1.0), FS));
+            sharpness(n, &specific).unwrap()
+        };
+        let reference = measure(920.0, 1080.0);
+        assert!(close(reference, 1.0, 0.08, 0.0), "S = {reference:.3} acum");
+        let high = measure(4000.0, 4800.0);
+        let low = measure(150.0, 250.0);
+        assert!(high > 2.0 * reference && low < 0.6 * reference, "low {low:.2}, ref {reference:.2}, high {high:.2}");
+    }
+
+    /// Daniel & Weber: 1 kHz, 100 % amplitude-modulated at 70 Hz, 60 dB is 1 asper (±17 %, as
+    /// MoSQITo's compliance test); the same tone unmodulated is hardly rough at all.
+    #[test]
+    fn roughness_of_reference_tone_is_one_asper() {
+        let len = (0.2 * FS) as usize;
+        let am: Vec<f64> = (0..len)
+            .map(|i| {
+                let t = i as f64 / FS;
+                (1.0 + (2.0 * PI * 70.0 * t).sin()) * (2.0 * PI * 1000.0 * t).sin()
+            })
+            .collect();
+        let rms = (am.iter().map(|v| v * v).sum::<f64>() / len as f64).sqrt();
+        let am: Vec<f64> = am.iter().map(|v| v * 2e-5 * 1000.0 / rms).collect();
+        let model = RoughnessModel::new(len, FS);
+        let r = model.roughness(&am);
+        assert!((0.83..=1.17).contains(&r), "R = {r:.3} asper");
+        let plain = model.roughness(&tone(1000.0, 60.0, 0.2));
+        assert!(plain < 0.1, "unmodulated R = {plain:.3}");
+    }
 }
 
 mod dynamics {
@@ -474,12 +695,11 @@ mod spectrum_and_stereo {
     }
 }
 
-mod structure_and_activity {
+mod activity_and_spectrogram {
     use std::f64::consts::PI;
 
-    use super::spectrum_and_stereo::noise;
     use crate::decode::AudioData;
-    use crate::{activity, sections, spectrogram};
+    use crate::{activity, spectrogram};
 
     const RATE: u32 = 44100;
 
@@ -518,35 +738,6 @@ mod structure_and_activity {
     fn spectrogram_of_silence_is_black() {
         let a = mono(vec![0.0; RATE as usize * 2]);
         assert!(spectrogram::compute(&a, 0, a.frames(), 16, 16).iter().all(|&v| v == 0));
-    }
-
-    /// Quiet tone, loud noise, quiet tone again: an A B A song.
-    fn aba() -> AudioData {
-        let mut s = tone(220.0, 20.0, 0.1);
-        s.extend(noise(7, 20 * RATE as usize, 0.4));
-        s.extend(tone(220.0, 20.0, 0.1));
-        mono(s)
-    }
-
-    #[test]
-    fn sections_split_and_label_an_aba_form() {
-        let a = aba();
-        let s = sections::analyze(&a, 0, a.frames());
-        assert_eq!(s.len(), 3, "{s:?}");
-        assert!((s[1].start - 20.0).abs() < 1.5 && (s[2].start - 40.0).abs() < 1.5, "{s:?}");
-        assert_eq!((s[0].label, s[1].label, s[2].label), (0, 1, 0));
-        assert!(s[1].level > s[0].level + 6.0, "noise section is louder: {s:?}");
-        assert_eq!(s[0].start, 0.0);
-        assert!((s[2].end - 60.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn short_or_steady_audio_is_one_section() {
-        let a = mono(tone(440.0, 10.0, 0.3));
-        let s = sections::analyze(&a, 0, a.frames());
-        assert_eq!(s.len(), 1);
-        let steady = mono(noise(3, 60 * RATE as usize, 0.3));
-        assert_eq!(sections::analyze(&steady, 0, steady.frames()).len(), 1);
     }
 
     #[test]
@@ -890,7 +1081,7 @@ fn library_real_folder() {
     assert!(first.is_empty(), "no shared values means no match");
     let path = lib.paths().into_iter().min().unwrap();
     let audio = decode_file(std::path::Path::new(&path)).unwrap();
-    let report = crate::analyze_range(&audio, 0, audio.frames(), false).unwrap();
+    let report = crate::analyze_range(&audio, 0, audio.frames(), false, true).unwrap();
     let matches = lib.similar(&report.features, &[], [0.5, 0.3, 0.2], 5);
     for m in &matches {
         println!("{:5.1}  t{:5.1} d{:5.1} s{:5.1}  {}", m.score, m.tonal.unwrap_or(0.0), m.dynamics.unwrap_or(0.0), m.stereo.unwrap_or(0.0), m.track.rel_path);
@@ -903,19 +1094,12 @@ fn library_real_folder() {
     let _ = std::fs::remove_file(db);
 }
 
-/// Sections, band activity and spectrogram timings for a real file:
+/// Band activity and spectrogram timings for a real file:
 /// `SONIC_SECTIONS_FILE=song.flac cargo test sections_real_file -- --nocapture`.
 #[test]
 fn sections_real_file() {
     let Some(path) = std::env::var_os("SONIC_SECTIONS_FILE") else { return };
     let audio = decode_file(std::path::Path::new(&path)).unwrap();
-    let t = std::time::Instant::now();
-    let sections = crate::sections::analyze(&audio, 0, audio.frames());
-    println!("sections: {:.2?}", t.elapsed());
-    for s in &sections {
-        let label = (b'A' + s.label as u8) as char;
-        println!("  {label}  {:6.1}–{:6.1} s  {:+.1} dB", s.start, s.end, s.level);
-    }
     let t = std::time::Instant::now();
     crate::activity::analyze(&audio, 0, audio.frames());
     println!("band activity: {:.2?}", t.elapsed());
@@ -945,39 +1129,157 @@ fn deemix_search() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Sets up the song-structure environment (if needed) and analyses files, exactly as the app
-/// does: `SONIC_STRUCTURE_FILE=a.flac[:b.flac…] [SONIC_STRUCTURE_ROOT=dir] cargo test
-/// structure_real_file -- --nocapture`. Several files are queued at once, so their stages
-/// overlap (stems of the next while the model runs on the previous). Without a root, a
-/// temporary one is used (slow: full install).
+/// Markers follow the audio: a move keeps them, copies share them, a re-bounce over the same path
+/// carries them over, the first (path-keyed) format migrates, and an empty list removes them.
 #[test]
-fn structure_real_file() {
-    let Some(files) = std::env::var_os("SONIC_STRUCTURE_FILE") else { return };
-    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
-    let root = std::env::var_os("SONIC_STRUCTURE_ROOT").map_or_else(|| std::env::temp_dir().join("abnormal-structure-test"), PathBuf::from);
-    let engine = std::sync::Arc::new(crate::structure::Engine::new(home, root));
-    let t = std::time::Instant::now();
-    engine.install(&|s| println!("setup: {s:?}"));
-    let status = engine.status();
-    assert!(status.installed, "install failed: {:?}", status.error);
-    println!("setup took {:.0?}", t.elapsed());
+fn markers_follow_the_audio() {
+    use crate::markers::{Marker, Markers};
+    let db = std::env::temp_dir().join(format!("abnormal-markers-{}.json", std::process::id()));
+    let m = |time: f64, note: &str| Marker { time, note: note.into() };
+    let notes = vec![m(3.5, ""), m(42.0, "harsh vocal")];
 
-    let paths: Vec<PathBuf> = std::env::split_paths(&files).collect();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let t = std::time::Instant::now();
-    for path in &paths {
-        let tx = tx.clone();
-        engine.request(path.clone(), std::sync::Arc::new(move |o| tx.send(o.clone()).unwrap()));
+    let store = Markers::new(db.clone());
+    store.set("mix-v1", "/old/mix.wav", vec![m(42.0, "harsh vocal"), m(3.5, "")]).unwrap();
+    // Reloaded from disk, sorted; moved to another folder: same audio, same notes.
+    let store = Markers::new(db.clone());
+    assert_eq!(store.get("mix-v1", "/new/mix.wav"), notes);
+    // A file with the same audio but no shared path gets nothing; an unrelated one neither.
+    assert!(store.get("other", "/elsewhere.wav").is_empty());
+    // Re-bounced over /new/mix.wav (new audio): carried over, and the copy at /old keeps them too.
+    assert_eq!(store.get("mix-v2", "/new/mix.wav"), notes);
+    assert_eq!(store.get("mix-v1", "/old/mix.wav"), notes);
+    // Re-bounced again over its only path: moved, not left behind.
+    store.set("mix-v2", "/new/mix.wav", vec![m(1.0, "v2")]).unwrap();
+    assert_eq!(store.get("mix-v3", "/new/mix.wav"), vec![m(1.0, "v2")]);
+    assert!(!std::fs::read_to_string(&db).unwrap().contains("mix-v2"));
+    // Clearing removes the entry.
+    store.set("mix-v3", "/new/mix.wav", vec![]).unwrap();
+    assert!(Markers::new(db.clone()).get("mix-v3", "/new/mix.wav").is_empty());
+
+    // First format, keyed by path: claimed by the audio found there.
+    std::fs::write(&db, r#"{"/a.flac":[{"time":2.0,"note":"intro"}]}"#).unwrap();
+    let store = Markers::new(db.clone());
+    assert_eq!(store.get("a", "/a.flac"), vec![m(2.0, "intro")]);
+    assert_eq!(Markers::new(db.clone()).get("a", "/moved/a.flac"), vec![m(2.0, "intro")]);
+    let _ = std::fs::remove_file(db);
+}
+
+/// Sessions keep their lanes in order with their versions, names and front version, find the
+/// files again when their folder moves, still open the first (flat) format, and the recent list
+/// puts the last used first without duplicates.
+#[test]
+fn sessions_round_trip() {
+    use crate::sessions::{self, Lane, Recents};
+    let root = std::env::temp_dir().join(format!("abnormal-sessions-{}", std::process::id()));
+    let album = root.join("album");
+    std::fs::create_dir_all(&album).unwrap();
+    let at = |dir: &std::path::Path, n: &str| dir.join(n).to_string_lossy().into_owned();
+    for n in ["2 b v1.wav", "2 b v2.wav", "1 a.wav"] {
+        std::fs::write(album.join(n), b"").unwrap();
     }
-    for _ in &paths {
-        let outcome = rx.recv().unwrap();
-        println!("{} done after {:.0?}", outcome.path, t.elapsed());
-        let s = outcome.structure.unwrap_or_else(|| panic!("{:?}", outcome.error));
-        println!("bpm {:?}, {} beats, {} bars", s.bpm, s.beats.len(), s.downbeats.len());
-        for seg in &s.segments {
-            println!("  {:6.1}–{:6.1}  {}", seg.start, seg.end, seg.label);
-        }
-        assert!(!s.segments.is_empty());
-        assert!(engine.cached(std::path::Path::new(&outcome.path)).is_some(), "result should be cached");
-    }
+    let lanes = vec![
+        Lane { name: "Song B".into(), versions: vec![at(&album, "2 b v1.wav"), at(&album, "2 b v2.wav")], front: 1 },
+        Lane { name: String::new(), versions: vec![at(&album, "1 a.wav")], front: 0 },
+        Lane { name: "empty".into(), versions: vec![], front: 0 },
+    ];
+    let file = album.join("Album.abnormal");
+    let saved = sessions::write(&file, &lanes).unwrap();
+    assert_eq!(saved.name, "Album");
+    assert_eq!(sessions::read(&file).unwrap().lanes, lanes[..2]);
+
+    // The album folder moved: files are found next to the session.
+    let moved = root.join("moved");
+    std::fs::rename(&album, &moved).unwrap();
+    let opened = sessions::read(&moved.join("Album.abnormal")).unwrap();
+    assert_eq!(opened.lanes[0].versions, [at(&moved, "2 b v1.wav"), at(&moved, "2 b v2.wav")]);
+    assert_eq!((opened.lanes[0].name.as_str(), opened.lanes[0].front), ("Song B", 1));
+
+    // The first format: a flat list of tracks, one version per lane.
+    let v1 = moved.join("Old.abnormal");
+    let a = at(&moved, "1 a.wav");
+    std::fs::write(&v1, format!(r#"{{"version":1,"tracks":[{{"path":{a:?}}}]}}"#)).unwrap();
+    assert_eq!(sessions::read(&v1).unwrap().lanes, [Lane { name: String::new(), versions: vec![a], front: 0 }]);
+
+    let recents = Recents::new(root.join("recent.json"));
+    recents.touch(&opened);
+    recents.touch(&saved); // its file is gone: remembered, but not listed
+    recents.touch(&opened);
+    let list = Recents::new(root.join("recent.json")).list();
+    assert_eq!(list.len(), 1);
+    assert_eq!((list[0].name.as_str(), list[0].tracks), ("Album", 2));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Prepared versions: wanted files are prepared in order, kept until no longer wanted, found by
+/// the slot playing them, and prepared again when the file changes (a re-bounce).
+#[test]
+fn prepared_versions_follow_the_files() {
+    use crate::decode::AudioData;
+    use crate::prepared::{Decoded, Prepared, stamp_of};
+    use std::sync::Arc;
+    let dir = std::env::temp_dir().join(format!("abnormal-prepared-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    let (v1, v2) = (file("v1.wav"), file("v2.wav"));
+    std::fs::write(&v1, b"one").unwrap();
+    std::fs::write(&v2, b"two").unwrap();
+    let stamp = |p: &str| stamp_of(std::path::Path::new(p)).unwrap();
+    let decoded = |tag: &'static str| Decoded { audio: Arc::new(AudioData { sample_rate: 48000, channels: vec![vec![0.0; 480]] }), buffer: None, info: tag };
+
+    let prepared = Prepared::<&str>::new();
+    prepared.want(vec![v1.clone(), v2.clone()]);
+    assert_eq!(prepared.next().map(|n| n.0), Some(v1.clone()));
+    prepared.keep(&v1, stamp(&v1), Some(&decoded("v1")), Some("{\"a\":1}".into()));
+    assert_eq!(prepared.next().map(|n| n.0), Some(v2.clone()));
+    assert_eq!(prepared.decoded(&v1).map(|d| d.info), Some("v1"));
+    assert_eq!(prepared.ready(), [v1.clone()]);
+
+    // A slot playing v1 finds its analysis.
+    prepared.set_slot(3, Some((v1.clone(), stamp(&v1))));
+    assert_eq!(prepared.slot_report(3).as_deref(), Some("{\"a\":1}"));
+
+    // Re-bounced over the same file (different size): prepared again.
+    std::fs::write(&v1, b"one, louder").unwrap();
+    assert!(prepared.decoded(&v1).is_none());
+    assert_eq!(prepared.next().map(|n| n.0), Some(v1.clone()));
+
+    // No longer wanted: dropped, and not kept when offered.
+    prepared.want(vec![v2.clone()]);
+    prepared.keep(&v1, stamp(&v1), Some(&decoded("v1")), None);
+    assert!(prepared.decoded(&v1).is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Library standing: percentiles (ties count half), quantiles, and values read off fingerprints.
+#[test]
+fn library_standing_percentiles() {
+    use crate::similarity::Features;
+    use crate::standing::{Input, standings};
+    // A fingerprint with a flat tonal shape except `bright` dB above 2.5 kHz, and PLR `plr`.
+    let fp = |bright: f32, plr: f32| Features {
+        tonal: (0..28).map(|i| Some(if 20.0 * 2f64.powf((16 + 8 * i) as f64 / 24.0) >= 2500.0 { bright } else { 0.0 })).collect(),
+        dynamics: vec![Some(6.0), Some(plr), Some(9.0), Some(12.0), Some(8.0), Some(2.0), Some(10.0)],
+        stereo: vec![Some(0.8); 8],
+    };
+    let library: Vec<Features> = (0..10).map(|i| fp(i as f32, 5.0 + i as f32)).collect();
+    let population: Vec<(&Features, Option<f64>)> = library.iter().enumerate().map(|(i, f)| (f, Some(-14.0 + i as f64))).collect();
+    let mix = Input { features: fp(7.5, 2.0), integrated: Some(-20.0) };
+    let reference = Input { features: fp(4.0, 9.0), integrated: Some(-10.0) };
+    let out = standings(&[Some(mix), Some(reference), None], &population);
+
+    let get = |key: &str| out.iter().find(|s| s.key == key).unwrap();
+    let bright = get("brightness");
+    assert_eq!(bright.count, 10);
+    assert_eq!(bright.quantiles.len(), 21);
+    assert!((bright.quantiles[0] - 0.0).abs() < 1e-9 && (bright.quantiles[20] - 9.0).abs() < 1e-9);
+    assert!((bright.values[0].unwrap() - 7.5).abs() < 1e-6);
+    assert!((bright.percentiles[0].unwrap() - 80.0).abs() < 1e-9, "{:?}", bright.percentiles); // 8 of 10 below
+    assert!((bright.percentiles[1].unwrap() - 45.0).abs() < 1e-9, "{:?}", bright.percentiles); // 4 below, 1 tie
+    assert_eq!(bright.percentiles[2], None);
+    // The mix: more limited and quieter than the whole library; the reference mid-pack.
+    assert_eq!(get("plr").percentiles[0], Some(0.0));
+    assert_eq!(get("loudness").percentiles[0], Some(0.0));
+    assert_eq!(get("loudness").percentiles[1], Some(45.0));
+    // Constant over the library: still listed, every value tied.
+    assert_eq!(get("punch").percentiles[0], Some(50.0));
 }

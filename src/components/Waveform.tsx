@@ -2,12 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { flash, reduced } from "../lib/motion";
 import { api } from "../lib/api";
-import type { Peaks, Region, Section, Slot, SongStructure, StructureSegment } from "../lib/api";
+import type { Curve, Marker, Peaks, Region, Slot } from "../lib/api";
+import { MarkerLayer } from "./Markers";
 import { formatTime, minorTickStep, tickStep } from "../lib/format";
 import type { Overlay } from "../lib/overlay";
-import { sectionName } from "../lib/sections";
-import { EDIT_LABELS, moveBoundary, partColor, partName, partsOf, rename, snapToBar } from "../lib/structure";
-import type { Part } from "../lib/structure";
 import { ceilingOf, freqToY, renderSpectrogram } from "../lib/spectrogram";
 import type { View } from "../lib/view";
 import { isFull, panView, zoomView } from "../lib/view";
@@ -15,23 +13,27 @@ import { isFull, panView, zoomView } from "../lib/view";
 interface Props {
   slot: Slot;
   peaks: Peaks;
+  /** Changes with each new song in the lane; new peaks for the same song are another version of
+   *  it, whose bars reshape in place rather than the waveform sweeping in. */
+  song: number;
   duration: number;
   view: View;
   position: number;
   region: Region | null;
   /** Curve drawn over the waveform (loudness, PSR), or null for none. */
   overlay: Overlay | null;
+  /** Playback gain shown on the bars, dB (normalizing): they grow by it. */
+  gainDb: number;
+  /** Momentary loudness over the whole track (with `gainDb` applied), for the wave display's
+   *  bodies; null until measured. */
+  loudness: Curve | null;
   display: Display;
-  /** Detected song sections, drawn as a clickable strip; null while detecting. */
-  sections: Section[] | null;
-  /** Labelled song parts from the structure model; shown instead of `sections` when present. */
-  structure: SongStructure | null;
-  /** A labelled part was clicked (without Shift): select it, and the matching part in the other track. */
-  onPart: (part: Part) => void;
-  /** The user corrected the parts (moved a border, renamed one). */
-  onPartsEdit: (segments: StructureSegment[]) => void;
-  onPartsReset: () => void;
   onSeek: (seconds: number) => void;
+  markers: Marker[];
+  /** Time of the marker whose note is being edited, or null. */
+  editingMarker: number | null;
+  onMarkers: (markers: Marker[]) => void;
+  onEditMarker: (time: number | null) => void;
   onRegion: (region: Region | null) => void;
   /** This track loops its selection; the loop button on the selection toggles it. */
   looping: boolean;
@@ -39,7 +41,8 @@ interface Props {
   onView: (view: View) => void;
 }
 
-export type Display = "wave" | "spectrogram";
+/** Wave: loudness bodies under faint peak caps, on a dB scale. Peak: peak bars, linear. */
+export type Display = "wave" | "peak" | "spectrogram";
 
 /** Pointer movement (px) before a press becomes a region drag instead of a click-to-seek. */
 const DRAG_THRESHOLD = 4;
@@ -57,6 +60,8 @@ interface SpecImage {
   start: number;
   end: number;
   image: HTMLCanvasElement;
+  /** The audio it was made from (its peaks), so another version's replaces it once ready. */
+  of?: Peaks;
 }
 
 /** A curve overlay changing into another: `from` (null = none) fades and bends into the new one. */
@@ -67,8 +72,9 @@ interface Morph {
 }
 const MORPH_MS = 380;
 const DISPLAY_FADE_MS = 320;
-/** With a curve shown, this strip at the right (CSS px) holds its scale labels alone: bars, the
- *  curve and its lines stop before it, so nothing ever covers a label. */
+/** With a curve shown, this strip at the right (CSS px) holds its scale labels alone: the time
+ *  axis (bars, curve, selection, strips, ruler) is squeezed to end before it, so nothing ever
+ *  covers a label and the end of the track stays visible. */
 const LABEL_GUTTER = 34;
 /** A playhead move larger than this in one frame (s) is a jump, drawn as a glide of this long (ms). */
 const PLAYHEAD_JUMP_SEC = 0.2;
@@ -95,6 +101,16 @@ const GRID_MIN_PX = 6;
 const GRID_FADE_PX = 18;
 /** How long bars take to settle on their new heights after a zoom, pan or new data, ms. */
 const BAR_EASE_MS = 160;
+/** …and to grow or shrink when the track's gain changes (normalizing), slower so it reads. */
+const GAIN_EASE_MS = 420;
+/** …and to reshape into another version of the song. Bars arriving in steps (overview, then
+ *  finer peaks, then loudness) within `VERSION_WINDOW_MS` of the switch all take this long. */
+const VERSION_EASE_MS = 450;
+const VERSION_WINDOW_MS = 1500;
+/** Wave display: bottom of its dB scale (peak dBFS and loudness LUFS share it), the same for every
+ *  lane so tracks compare at a glance. A loud master's sections still differ by several LU here,
+ *  where its peaks barely move. */
+const WAVE_FLOOR_DB = -30;
 const SWEEP_IN: Keyframe[] = [{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0 0 0)" }];
 
 /** Whole-track spectrogram resolution: shown while a view's detail image loads. */
@@ -103,7 +119,7 @@ const SPEC_MAX = { columns: 2048, rows: 256 };
 const SPEC_LABELS = [100, 1000, 10000];
 
 export function Waveform(props: Props) {
-  const { slot, peaks, duration, view, region, overlay, display, sections } = props;
+  const { slot, peaks, duration, view, region, overlay, display } = props;
 
   // The playhead as drawn: when it jumps (a seek, ±5 s, back to start, a loop restarting) it
   // glides from where it was to the live position instead of jumping (display only; playback
@@ -126,6 +142,9 @@ export function Waveform(props: Props) {
   const fadeRef = useRef<HTMLCanvasElement>(null);
   const shownDisplay = useRef(display);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  /** The labels' strip at the right, and the width left for the time axis (CSS px). */
+  const gutter = overlay ? LABEL_GUTTER : 0;
+  const plotWidth = Math.max(0, size.width - gutter);
   const [draft, setDraft] = useState<Region | null>(null);
   /** Pointer position over the lane, CSS px from its left edge (null when outside). */
   const [hoverX, setHoverX] = useState<number | null>(null);
@@ -140,6 +159,12 @@ export function Waveform(props: Props) {
   const shownOverlay = useRef<Overlay | null>(null);
   /** Bar heights on screen (0–1 of full scale), eased towards new ones. */
   const shownBars = useRef<Float32Array | null>(null);
+  /** The gain the bars were last drawn at, dB. */
+  const shownGain = useRef(props.gainDb);
+  /** The peaks and song last drawn, and when another version of the song last came in. */
+  const shownPeaks = useRef<Peaks | null>(null);
+  const shownSong = useRef(props.song);
+  const versionAt = useRef(-Infinity);
   /** Bumped when bars settle, so the playhead/hover marks (read from `shownBars`) catch up. */
   const [, setBarsSettled] = useState(0);
   const morphFrame = useRef(0);
@@ -161,7 +186,7 @@ export function Waveform(props: Props) {
 
   // Fetch finer peaks once the overview no longer has a bucket per device pixel.
   useEffect(() => {
-    const px = Math.round(size.width * (window.devicePixelRatio || 1));
+    const px = Math.round(plotWidth * (window.devicePixelRatio || 1));
     const end = Math.min(view.end, duration);
     const overviewBuckets = (peaks.buckets * (end - view.start)) / duration;
     if (!px || end <= view.start || overviewBuckets >= px) {
@@ -182,17 +207,20 @@ export function Waveform(props: Props) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [slot, peaks, duration, view.start, view.end, size.width]);
+  }, [slot, peaks, duration, view.start, view.end, plotWidth]);
 
-  // A new track starts with no spectrogram.
+  // A new song starts with no spectrogram; another version keeps the old one until its own is ready.
+  const specSong = useRef(props.song);
   useEffect(() => {
+    if (specSong.current === props.song) return;
+    specSong.current = props.song;
     setSpecOverview(null);
     setSpecDetail(null);
     setSpecCeiling(null);
-  }, [slot, peaks]);
+  }, [slot, props.song]);
 
   useEffect(() => {
-    if (display !== "spectrogram" || specOverview) return;
+    if (display !== "spectrogram" || specOverview?.of === peaks) return;
     let cancelled = false;
     const { columns, rows } = SPEC_OVERVIEW;
     api
@@ -201,20 +229,20 @@ export function Waveform(props: Props) {
         if (cancelled) return;
         const ceiling = ceilingOf(data);
         setSpecCeiling(ceiling);
-        setSpecOverview({ start: 0, end: duration, image: renderSpectrogram(data, columns, rows, ceiling) });
+        setSpecOverview({ start: 0, end: duration, image: renderSpectrogram(data, columns, rows, ceiling), of: peaks });
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [display, specOverview, slot, duration]);
+  }, [display, specOverview, slot, duration, peaks]);
 
   // Detail at screen resolution for the visible window.
   useEffect(() => {
     if (display !== "spectrogram" || specCeiling === null) return;
     const dpr = window.devicePixelRatio || 1;
     const end = Math.min(view.end, duration);
-    const columns = Math.min(SPEC_MAX.columns, Math.round(size.width * dpr * ((end - view.start) / (view.end - view.start))));
+    const columns = Math.min(SPEC_MAX.columns, Math.round(plotWidth * dpr * ((end - view.start) / (view.end - view.start))));
     const rows = Math.min(SPEC_MAX.rows, Math.round(size.height * dpr));
     if (columns < 1 || rows < 1 || end <= view.start) return;
     let cancelled = false;
@@ -230,16 +258,16 @@ export function Waveform(props: Props) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [display, specCeiling, slot, duration, view.start, view.end, size.width, size.height]);
+  }, [display, specCeiling, slot, duration, view.start, view.end, plotWidth, size.height]);
 
   // The selection (or the one being dragged): bars inside it are lit, see `draw`.
   const selection = draft ?? region;
 
-  // The playhead's bar on the CSS-pixel grid (wave display only). The bars around it are drawn as
+  // The playhead's bar on the CSS-pixel grid (bar displays only). The bars around it are drawn as
   // live elements (squeezed or dilated towards the playhead), so the canvas leaves them out.
   const playheadBar =
-    display === "wave" && position >= view.start && position <= view.end && size.width > 0
-      ? Math.floor((((position - view.start) / (view.end - view.start)) * size.width) / (BAR_WIDTH + BAR_GAP))
+    display !== "spectrogram" && position >= view.start && position <= view.end && plotWidth > 0
+      ? Math.floor((((position - view.start) / (view.end - view.start)) * plotWidth) / (BAR_WIDTH + BAR_GAP))
       : null;
 
   useEffect(() => {
@@ -267,11 +295,24 @@ export function Waveform(props: Props) {
     const skip: [number, number] | null =
       playheadBar === null ? null : [playheadBar - PLAYHEAD_SPREAD, playheadBar + PLAYHEAD_SPREAD];
     const render = (morph: Morph | null, bars: Float32Array) =>
-      draw(canvas, view, duration, overlay, dpr, spec, morph, bars, skip, selection);
+      draw(canvas, view, duration, overlay, dpr, gutter, spec, morph, bars, display === "wave", skip, selection);
 
     // Bars ease from the heights on screen to the new ones (zoom, pan, finer data arriving)…
-    const targets = barPeaks(view, duration, overview, detail, w, dpr);
+    const peakBars = barPeaks(view, duration, overview, detail, Math.round(plotWidth * dpr), dpr);
+    if (props.gainDb) {
+      const g = 10 ** (props.gainDb / 20);
+      for (let i = 0; i < peakBars.length; i++) peakBars[i] *= g;
+    }
+    const targets = display === "wave" ? waveBars(peakBars, props.loudness, view, plotWidth) : peakBars;
     const fromBars = shownBars.current?.length === targets.length ? shownBars.current : targets;
+    const gainMoved = shownGain.current !== props.gainDb;
+    shownGain.current = props.gainDb;
+    // New peaks for the same song: another version came in front.
+    if (shownPeaks.current && shownPeaks.current !== peaks && shownSong.current === props.song) versionAt.current = performance.now();
+    shownPeaks.current = peaks;
+    shownSong.current = props.song;
+    const versionEase = performance.now() - versionAt.current < VERSION_WINDOW_MS;
+    const easeMs = gainMoved ? GAIN_EASE_MS : versionEase ? VERSION_EASE_MS : BAR_EASE_MS;
     // (Unchanged heights, e.g. only the playhead moved on a bar: nothing to ease.)
     const barsMove = fromBars !== targets && !reduced() && fromBars.some((v, i) => v !== targets[i] && !(Number.isNaN(v) && Number.isNaN(targets[i])));
     // …and a different curve (another mode, a curve switched on or off, a new track) morphs from
@@ -290,7 +331,7 @@ export function Waveform(props: Props) {
     const ease = (t: number) => 1 - (1 - t) ** 3;
     const step = (now: number) => {
       const tc = curveMoves ? Math.min(1, (now - start) / MORPH_MS) : 1;
-      const tb = barsMove ? Math.min(1, (now - start) / BAR_EASE_MS) : 1;
+      const tb = barsMove ? Math.min(1, (now - start) / easeMs) : 1;
       const k = ease(tb);
       const bars = tb < 1 ? targets.map((v, i) => fromBars[i] + (v - fromBars[i]) * k) : targets;
       shownBars.current = bars;
@@ -301,27 +342,34 @@ export function Waveform(props: Props) {
     step(start);
     // view.start/end rather than view: callers may pass a fresh object every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [peaks, duration, view.start, view.end, detail, overlay, size, display, specOverview, specDetail, playheadBar, selection?.start, selection?.end]);
+  }, [peaks, duration, view.start, view.end, detail, overlay, size, display, specOverview, specDetail, playheadBar, selection?.start, selection?.end, props.gainDb, props.loudness]);
 
-  // A newly loaded track sweeps in from the left.
+  // A new song sweeps in from the left (another version of it reshapes its bars instead).
+  const sweptSong = useRef<number | null>(null);
   useEffect(() => {
+    if (sweptSong.current === props.song) return;
+    sweptSong.current = props.song;
     flash(canvasRef.current, SWEEP_IN, 650);
-  }, [peaks]);
+  }, [props.song]);
 
-  // Wheel: vertical zooms around the cursor (pinch arrives as ctrl+wheel), horizontal pans.
+  // Wheel: ⌘+wheel or a pinch (arrives as ctrl+wheel) zooms around the cursor, a sideways swipe
+  // (or Shift+wheel) pans; a plain vertical scroll is left alone, so it scrolls the lanes.
   useEffect(() => {
     const el = containerRef.current!;
     const onWheel = (e: WheelEvent) => {
+      const zoom = e.ctrlKey || e.metaKey;
+      const horizontal = !zoom && (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY));
+      if (!zoom && !horizontal) return;
       e.preventDefault();
-      const { view: v, duration: d, onView } = latest.current;
+      const { view: v, duration: d, onView, overlay: o } = latest.current;
       const rect = el.getBoundingClientRect();
+      const width = rect.width - (o ? LABEL_GUTTER : 0);
       const span = v.end - v.start;
-      const horizontal = !e.ctrlKey && (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY));
       if (horizontal) {
         const delta = e.shiftKey ? e.deltaY || e.deltaX : e.deltaX;
-        onView(panView(v, (delta / rect.width) * span, d));
+        onView(panView(v, (delta / width) * span, d));
       } else {
-        const anchor = v.start + ((e.clientX - rect.left) / rect.width) * span;
+        const anchor = v.start + Math.min(1, (e.clientX - rect.left) / width) * span;
         const factor = Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.002));
         onView(zoomView(v, factor, anchor, d));
       }
@@ -334,7 +382,7 @@ export function Waveform(props: Props) {
 
   const timeAt = (clientX: number) => {
     const rect = containerRef.current!.getBoundingClientRect();
-    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / (rect.width - gutter)));
     return Math.min(view.start + frac * span, duration);
   };
 
@@ -369,7 +417,7 @@ export function Waveform(props: Props) {
 
   const shown = selection;
   const pct = (t: number) => `${((t - view.start) / span) * 100}%`;
-  const step = tickStep(span, size.width);
+  const step = tickStep(span, plotWidth);
   const firstTick = Math.ceil(view.start / step) * step;
   const ticks: number[] = [];
   for (let t = firstTick; t <= Math.min(view.end, duration) + 1e-9; t += step) ticks.push(t);
@@ -379,7 +427,7 @@ export function Waveform(props: Props) {
   // Time guidelines: one per ruler tick, and fainter subdivisions that fade in as zooming in
   // gives them room, so the time scale stays readable while bars change under it.
   const minor = minorTickStep(step);
-  const minorPx = (minor / span) * size.width;
+  const minorPx = (minor / span) * plotWidth;
   const minorAlpha = Math.min(1, Math.max(0, (minorPx - GRID_MIN_PX) / GRID_FADE_PX));
   const minorLines: number[] = [];
   if (minorAlpha > 0) {
@@ -394,16 +442,17 @@ export function Waveform(props: Props) {
   // is on screen right now (heights may be mid-ease).
   const pitch = BAR_WIDTH + BAR_GAP;
   // Bars that fit before the labels' strip (when a curve is shown).
-  const barCount = Math.floor((size.width - (overlay ? LABEL_GUTTER : 0) - BAR_WIDTH) / pitch) + 1;
+  const barCount = Math.floor((plotWidth - BAR_WIDTH) / pitch) + 1;
   const barAt = (x: number) => Math.floor(x / pitch);
+  // (In the wave display, the bodies: what the playhead and the pointer reshape.)
   const barHeight = (i: number) => {
     const v = shownBars.current?.[i];
     if (v === undefined || Number.isNaN(v)) return null;
     return 2 * Math.max(BAR_WIDTH / 2, Math.min(1, v) * (size.height / 2) * 0.95);
   };
-  const bars = display === "wave";
-  const playX = ((position - view.start) / span) * size.width;
-  const hoverBar = bars && hoverX !== null && hoverX >= 0 && hoverX < size.width ? barAt(hoverX) : null;
+  const bars = display !== "spectrogram";
+  const playX = ((position - view.start) / span) * plotWidth;
+  const hoverBar = bars && hoverX !== null && hoverX >= 0 && hoverX < plotWidth ? barAt(hoverX) : null;
 
   // The playhead as light sliding along the bars. Around it, bars are reshaped: dilated or
   // squeezed towards the playhead's fixed height, more the closer they are (a Gaussian of the
@@ -420,7 +469,7 @@ export function Waveform(props: Props) {
       const { sigma, power } = d < 0 ? PLAYHEAD_ATTACK : PLAYHEAD_RELEASE;
       const shape = Math.exp(-0.5 * (Math.abs(d) / sigma) ** power);
       const light = Math.exp(-0.5 * (d / PLAYHEAD_SIGMA) ** 2);
-      const inside = selection ? barCoverage(view.start + ((i * pitch) / size.width) * span, (BAR_WIDTH / size.width) * span, selection) : 0;
+      const inside = selection ? barCoverage(view.start + ((i * pitch) / plotWidth) * span, (BAR_WIDTH / plotWidth) * span, selection) : 0;
       playheadMarks.push({ i, height: own + (fixedHeight - own) * shape, light, inside });
     }
   }
@@ -439,7 +488,7 @@ export function Waveform(props: Props) {
   };
 
   return (
-    <div className="waveform">
+    <div className="waveform" style={{ "--gutter": `${gutter}px` } as CSSProperties}>
       <div
         ref={containerRef}
         className="waveform-canvas"
@@ -460,69 +509,66 @@ export function Waveform(props: Props) {
         <canvas ref={canvasRef} />
         {/* The previous display (waveform or spectrogram), fading out over the new one. */}
         <canvas ref={fadeRef} className="display-fade" />
-        {shown && shown.end > view.start && shown.start < view.end && (
-          <div
-            className={`region${draft ? " draft" : ""}${display === "spectrogram" ? " on-spec" : ""}${props.looping && !draft ? " looping" : ""}`}
-            style={{ left: pct(shown.start), width: `${((shown.end - shown.start) / span) * 100}%` }}
+        {/* Everything placed in time, over the canvas's plot area (left of the labels' strip). */}
+        <div className="plot">
+          {shown && shown.end > view.start && shown.start < view.end && (
+            <div
+              className={`region${draft ? " draft" : ""}${display === "spectrogram" ? " on-spec" : ""}${props.looping && !draft ? " looping" : ""}`}
+              style={{ left: pct(shown.start), width: `${((shown.end - shown.start) / span) * 100}%` }}
+            />
+          )}
+          {/* Loop this track's selection: a small button on top of it, at the middle of its visible part. */}
+          {region && !draft && region.end > view.start && region.start < view.end && (
+            <button
+              className={`loop-button${props.looping ? " on" : ""}`}
+              style={{ left: pct((Math.max(region.start, view.start) + Math.min(region.end, view.end)) / 2) }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={props.onToggleLoop}
+              title={props.looping ? "Looping this selection: click to stop (L)" : "Loop this selection (L)"}
+              aria-label={props.looping ? "Stop looping the selection" : "Loop the selection"}
+              aria-pressed={props.looping}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M17 2l3 3-3 3" />
+                <path d="M4 11V9a4 4 0 0 1 4-4h12" />
+                <path d="M7 22l-3-3 3-3" />
+                <path d="M20 13v2a4 4 0 0 1-4 4H4" />
+              </svg>
+            </button>
+          )}
+          {/* On the bars: the hovered bar lifts a little, the playhead's bar is lighter, wider and
+              taller. On the spectrogram, the playhead stays a line. */}
+          {/* Not inside the playhead's zone, where bars are already reshaped. */}
+          {(playheadBar === null || hoverBar === null || Math.abs(hoverBar - playheadBar) > PLAYHEAD_SPREAD) &&
+            barMark(hoverBar, "hover-bar", 1.06, 4, 0)}
+          {playheadMarks.map(({ i, height, light, inside }) => (
+            <div
+              key={`p${i}`}
+              className="bar-mark playhead-bar"
+              style={
+                {
+                  left: i * pitch - light,
+                  width: BAR_WIDTH + 2 * light,
+                  height,
+                  "--light": `${Math.round(light * 100)}%`,
+                  "--inside": `${Math.round(inside * 100)}%`,
+                  // Dimmed outside a selection like the canvas bars, but never the lit playhead.
+                  opacity: selection ? SELECTION_DIM + (1 - SELECTION_DIM) * Math.max(inside, light) : 1,
+                } as CSSProperties
+              }
+            />
+          ))}
+          {playheadVisible && !bars && <div className="playhead" style={{ left: pct(position) }} />}
+          <MarkerLayer
+            markers={props.markers}
+            view={view}
+            editing={props.editingMarker}
+            onChange={props.onMarkers}
+            onEdit={props.onEditMarker}
           />
-        )}
-        {/* Loop this track's selection: a small button on top of it, at the middle of its visible part. */}
-        {region && !draft && region.end > view.start && region.start < view.end && (
-          <button
-            className={`loop-button${props.looping ? " on" : ""}`}
-            style={{ left: pct((Math.max(region.start, view.start) + Math.min(region.end, view.end)) / 2) }}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => e.stopPropagation()}
-            onClick={props.onToggleLoop}
-            title={props.looping ? "Looping this selection: click to stop (L)" : "Loop this selection (L)"}
-            aria-label={props.looping ? "Stop looping the selection" : "Loop the selection"}
-            aria-pressed={props.looping}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M17 2l3 3-3 3" />
-              <path d="M4 11V9a4 4 0 0 1 4-4h12" />
-              <path d="M7 22l-3-3 3-3" />
-              <path d="M20 13v2a4 4 0 0 1-4 4H4" />
-            </svg>
-          </button>
-        )}
-        {/* On the bars: the hovered bar lifts a little, the playhead's bar is lighter, wider and
-            taller. On the spectrogram, the playhead stays a line. */}
-        {/* Not inside the playhead's zone, where bars are already reshaped. */}
-        {(playheadBar === null || hoverBar === null || Math.abs(hoverBar - playheadBar) > PLAYHEAD_SPREAD) &&
-          barMark(hoverBar, "hover-bar", 1.06, 4, 0)}
-        {playheadMarks.map(({ i, height, light, inside }) => (
-          <div
-            key={`p${i}`}
-            className="bar-mark playhead-bar"
-            style={
-              {
-                left: i * pitch - light,
-                width: BAR_WIDTH + 2 * light,
-                height,
-                "--light": `${Math.round(light * 100)}%`,
-                "--inside": `${Math.round(inside * 100)}%`,
-                // Dimmed outside a selection like the canvas bars, but never the lit playhead.
-                opacity: selection ? SELECTION_DIM + (1 - SELECTION_DIM) * Math.max(inside, light) : 1,
-              } as CSSProperties
-            }
-          />
-        ))}
-        {playheadVisible && !bars && <div className="playhead" style={{ left: pct(position) }} />}
+        </div>
       </div>
-      {props.structure ? (
-        <PartStrip
-          structure={props.structure}
-          view={view}
-          region={region}
-          onRegion={props.onRegion}
-          onPart={props.onPart}
-          onEdit={props.onPartsEdit}
-          onReset={props.onPartsReset}
-        />
-      ) : (
-        <SectionStrip sections={sections} view={view} region={region} onRegion={props.onRegion} />
-      )}
       <div className="ruler">
         {ticks.map((t) => (
           <span key={t.toFixed(3)} style={{ left: pct(t) }}>
@@ -532,203 +578,6 @@ export function Waveform(props: Props) {
       </div>
       {!isFull(view, duration) && (
         <Scrollbar view={view} duration={duration} onView={props.onView} />
-      )}
-    </div>
-  );
-}
-
-/**
- * Detected sections as blocks along the time axis. Click selects (and loops) a section;
- * Shift+click extends the current selection to include it.
- */
-function SectionStrip({
-  sections,
-  view,
-  region,
-  onRegion,
-}: {
-  sections: Section[] | null;
-  view: View;
-  region: Region | null;
-  onRegion: (r: Region | null) => void;
-}) {
-  const span = view.end - view.start;
-  if (!sections) return <div className="section-strip pending" />;
-  const pick = (s: Section, e: React.MouseEvent) => {
-    if (e.shiftKey && region) {
-      onRegion({ start: Math.min(region.start, s.start), end: Math.max(region.end, s.end) });
-    } else {
-      onRegion({ start: s.start, end: s.end });
-    }
-  };
-  return (
-    <div className="section-strip">
-      {sections.map((s, i) => {
-        if (s.end <= view.start || s.start >= view.end) return null;
-        const left = ((Math.max(s.start, view.start) - view.start) / span) * 100;
-        const right = ((Math.min(s.end, view.end) - view.start) / span) * 100;
-        const selected = !!region && Math.abs(region.start - s.start) < 0.01 && Math.abs(region.end - s.end) < 0.01;
-        return (
-          <button
-            key={i}
-            className={`section-block label-${s.label < 8 ? s.label : "other"}${selected ? " on" : ""}`}
-            style={{ left: `${left}%`, width: `${right - left}%` }}
-            onClick={(e) => pick(s, e)}
-            title={`Section ${sectionName(s.label)} · ${formatTime(s.start)}–${formatTime(s.end)} · ${s.level >= 0 ? "+" : ""}${s.level.toFixed(1)} dB vs track average\nClick to select, Shift+click to extend`}
-          >
-            {sectionName(s.label)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/** Boundary drags snap to a bar line within this many pixels (hold Alt to place freely). */
-const SNAP_PX = 10;
-/** A dragged boundary stays at least this far from its neighbours' other ends, seconds. */
-const MIN_PART_SECONDS = 1;
-
-/**
- * Labelled song parts (intro, verse, chorus…) from the structure model. Click selects a part
- * and the same part in the other track (2nd chorus ↔ 2nd chorus), so every tab compares like
- * with like; Shift+click extends this track's selection. Corrections: drag the line between
- * two parts (snaps to bars), click a selected part (or double-click) to rename it.
- */
-function PartStrip({
-  structure,
-  view,
-  region,
-  onRegion,
-  onPart,
-  onEdit,
-  onReset,
-}: {
-  structure: SongStructure;
-  view: View;
-  region: Region | null;
-  onRegion: (r: Region | null) => void;
-  onPart: (p: Part) => void;
-  onEdit: (segments: StructureSegment[]) => void;
-  onReset: () => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  /** Boundary being dragged: index of the part before it, and where it is now. */
-  const [drag, setDrag] = useState<{ index: number; time: number } | null>(null);
-  /** Part whose name picker is open. */
-  const [naming, setNaming] = useState<number | null>(null);
-  const span = view.end - view.start;
-  const detected = partsOf(structure);
-  const parts = drag ? partsOf({ ...structure, segments: moveBoundary(detected, drag.index, drag.time) }) : detected;
-
-  // Close the name picker on Escape or a click elsewhere.
-  useEffect(() => {
-    if (naming === null) return;
-    const close = (e: Event) => {
-      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
-      if (e instanceof MouseEvent && ref.current?.contains(e.target as Node)) return;
-      setNaming(null);
-    };
-    window.addEventListener("keydown", close, true);
-    window.addEventListener("mousedown", close, true);
-    return () => {
-      window.removeEventListener("keydown", close, true);
-      window.removeEventListener("mousedown", close, true);
-    };
-  }, [naming]);
-
-  const timeAt = (clientX: number, alt: boolean) => {
-    const rect = ref.current!.getBoundingClientRect();
-    const t = view.start + ((clientX - rect.left) / rect.width) * span;
-    return alt ? t : snapToBar(structure, t, (SNAP_PX / rect.width) * span);
-  };
-  const dragTo = (index: number, e: React.PointerEvent) => {
-    const lo = detected[index].start + MIN_PART_SECONDS;
-    const hi = detected[index + 1].end - MIN_PART_SECONDS;
-    setDrag({ index, time: Math.min(hi, Math.max(lo, timeAt(e.clientX, e.altKey))) });
-  };
-  const pct = (t: number) => `${((t - view.start) / span) * 100}%`;
-  const isSelected = (p: Part) => !!region && Math.abs(region.start - p.start) < 0.01 && Math.abs(region.end - p.end) < 0.01;
-
-  return (
-    <div className="section-strip" ref={ref}>
-      {parts.map((p, i) => {
-        if (p.end <= view.start || p.start >= view.end) return null;
-        const left = Math.max(p.start, view.start);
-        const right = Math.min(p.end, view.end);
-        const selected = isSelected(p);
-        return (
-          <button
-            key={`p${i}`}
-            className={`section-block label-${partColor(p.label)}${selected ? " on" : ""}`}
-            style={{ left: pct(left), width: `${((right - left) / span) * 100}%` }}
-            onClick={(e) => {
-              if (e.shiftKey && region) onRegion({ start: Math.min(region.start, p.start), end: Math.max(region.end, p.end) });
-              else if (selected) setNaming(i);
-              else onPart(p);
-            }}
-            onDoubleClick={() => setNaming(i)}
-            title={`${partName(p)} · ${formatTime(p.start)}–${formatTime(p.end)}${structure.edited ? " · edited" : ""}\nClick to select it here and in the other track, click again to rename, Shift+click to extend. Drag a border to move it.`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
-      {detected.slice(0, -1).map((p, i) => {
-        const next = detected[i + 1];
-        // Only parts that touch share a draggable border.
-        if (Math.abs(next.start - p.end) > 0.05) return null;
-        const at = drag?.index === i ? drag.time : p.end;
-        if (at <= view.start || at >= view.end) return null;
-        return (
-          <div
-            key={`b${i}`}
-            className={`part-boundary${drag?.index === i ? " dragging" : ""}`}
-            style={{ left: pct(at) }}
-            title="Drag to move this border (snaps to bars, hold Alt to place freely)"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.currentTarget.setPointerCapture(e.pointerId);
-              dragTo(i, e);
-            }}
-            onPointerMove={(e) => drag?.index === i && dragTo(i, e)}
-            onPointerUp={() => {
-              if (drag && Math.abs(drag.time - detected[drag.index].end) > 0.01) onEdit(moveBoundary(detected, drag.index, drag.time));
-              setDrag(null);
-            }}
-            onPointerCancel={() => setDrag(null)}
-          />
-        );
-      })}
-      {naming !== null && parts[naming] && (
-        <div className="part-names" style={{ left: pct(Math.max(parts[naming].start, view.start)) }} role="menu">
-          {EDIT_LABELS.map((label) => (
-            <button
-              key={label}
-              role="menuitem"
-              className={`label-${partColor(label)}${parts[naming].label === label ? " on" : ""}`}
-              onClick={() => {
-                onEdit(rename(parts, naming, label));
-                setNaming(null);
-              }}
-            >
-              {label}
-            </button>
-          ))}
-          {structure.edited && (
-            <button
-              className="reset"
-              role="menuitem"
-              title="Forget all corrections to this track's parts"
-              onClick={() => {
-                onReset();
-                setNaming(null);
-              }}
-            >
-              Reset to detected
-            </button>
-          )}
-        </div>
       )}
     </div>
   );
@@ -787,9 +636,13 @@ function draw(
   duration: number,
   overlay: Overlay | null,
   dpr: number,
+  /** The labels' strip at the right, CSS px: time runs across the rest. */
+  gutter: number,
   spec: (SpecImage | null)[] | null,
   morph: Morph | null,
   bars: Float32Array,
+  /** `bars` holds bodies then caps (see `waveBars`), rather than peaks alone. */
+  layered: boolean,
   /** Bars drawn elsewhere (around the playhead), left out here. */
   skip: [number, number] | null,
   /** Selected range: its bars are lit, the others dimmed. */
@@ -804,9 +657,9 @@ function draw(
   const mid = h / 2;
   const scale = mid * 0.95;
 
-  const plot = overlay || morph?.from ? w - LABEL_GUTTER * dpr : w;
+  const plot = w - gutter * dpr;
   if (spec) {
-    drawSpectrogram(ctx, spec, view, w, h, dpr, color);
+    drawSpectrogram(ctx, spec, view, w, h, dpr, color, plot);
     if (plot < w) {
       ctx.fillStyle = "rgba(14, 16, 19, 0.85)";
       ctx.fillRect(plot, 0, w - plot, h);
@@ -818,36 +671,94 @@ function draw(
   ctx.fillStyle = color("--wave-axis");
   ctx.fillRect(0, Math.floor(mid), w, 1);
 
-  // Rounded bars on a fixed grid, each as tall as the peak level of the time it covers, mirrored
-  // about the centre line. One colour (the lane's); `bars` may be mid-ease to new heights.
+  // Rounded bars on a fixed grid, mirrored about the centre line, one colour (the lane's): as tall
+  // as the peak level of the time each covers, or (layered) a loudness body under a faint peak
+  // cap. `bars` may be mid-ease to new heights.
   const pitch = (BAR_WIDTH + BAR_GAP) * dpr;
   const barW = BAR_WIDTH * dpr;
   const radius = barW / 2;
-  const secPerPx = (view.end - view.start) / w;
+  const secPerPx = (view.end - view.start) / plot;
   const wave = color("--wave");
   const lit = color("--wave-selected");
-  for (let i = 0; i < bars.length; i++) {
-    const v = bars[i];
-    if (Number.isNaN(v) || (skip && i >= skip[0] && i <= skip[1])) continue;
-    if (i * pitch + barW > plot) break;
+  const count = layered ? bars.length / 2 : bars.length;
+  const bar = (i: number, v: number, alpha: number) => {
     // Never shorter than a round dot, so quiet passages keep a visible line of beads.
     const half = Math.max(radius, Math.min(1, v) * scale);
     // With a selection, like the playhead: bars inside it lit, edge bars by how much of them is
     // inside (so the boundary moves smoothly while dragging), the rest a step back.
     const inside = selection ? barCoverage(view.start + i * pitch * secPerPx, barW * secPerPx, selection) : 0;
-    ctx.globalAlpha = selection ? SELECTION_DIM + (1 - SELECTION_DIM) * inside : 1;
+    ctx.globalAlpha = alpha * (selection ? SELECTION_DIM + (1 - SELECTION_DIM) * inside : 1);
     ctx.fillStyle = wave;
     ctx.beginPath();
     ctx.roundRect(i * pitch, mid - half, barW, 2 * half, radius);
     ctx.fill();
     if (inside > 0) {
-      ctx.globalAlpha = inside;
+      ctx.globalAlpha = alpha * inside;
       ctx.fillStyle = lit;
       ctx.fill();
     }
+  };
+  for (let i = 0; i < count; i++) {
+    if (i * pitch + barW > plot) break;
+    // Caps everywhere, the playhead's zone included: its live bars reshape the bodies only.
+    if (layered && !Number.isNaN(bars[count + i])) bar(i, bars[count + i], WAVE_CAP_ALPHA);
+    if (!Number.isNaN(bars[i]) && !(skip && i >= skip[0] && i <= skip[1])) bar(i, bars[i], 1);
   }
   ctx.globalAlpha = 1;
   drawOverlays(ctx, overlay, morph, view, duration, w, h, dpr, color, plot);
+}
+
+/** Opacity of the wave display's peak caps, over the solid loudness bodies. */
+const WAVE_CAP_ALPHA = 0.32;
+
+/** A level in dB as a share of the wave display's height. */
+const waveHeight = (db: number) => Math.min(1, Math.max(0, (db - WAVE_FLOOR_DB) / -WAVE_FLOOR_DB));
+
+/**
+ * The wave display's bars from the peak bars (linear 0–1, NaN past the end): bodies (the loudest
+ * momentary loudness in each bar's time, or at its middle when it's shorter than the curve's hop),
+ * then caps (the peaks), both on the dB scale; `[bodies…, caps…]`. Bodies are 0 until the
+ * loudness is measured, so they grow in when it arrives.
+ */
+function waveBars(peakBars: Float32Array, loudness: Curve | null, view: View, plotWidth: number): Float32Array {
+  const n = peakBars.length;
+  const out = new Float32Array(2 * n);
+  const secPerBar = ((view.end - view.start) / plotWidth) * (BAR_WIDTH + BAR_GAP);
+  for (let i = 0; i < n; i++) {
+    const peak = peakBars[i];
+    if (Number.isNaN(peak)) {
+      out[i] = NaN;
+      out[n + i] = NaN;
+      continue;
+    }
+    const cap = peak > 0 ? waveHeight(20 * Math.log10(peak)) : 0;
+    out[n + i] = cap;
+    const db = loudness ? loudestIn(loudness, view.start + i * secPerBar, view.start + (i + 1) * secPerBar) : null;
+    // Loudness never reads above the peaks on screen (it can't, short of rounding).
+    out[i] = db === null ? 0 : Math.min(cap, waveHeight(db));
+  }
+  return out;
+}
+
+/** The highest reading of `curve` in [t0, t1), or its value at the middle when no point falls inside. */
+function loudestIn(curve: Curve, t0: number, t1: number): number | null {
+  const { values, hop } = curve;
+  const first = Math.max(0, Math.ceil((t0 - curve.t0) / hop));
+  const last = Math.min(values.length - 1, Math.ceil((t1 - curve.t0) / hop) - 1);
+  if (last >= first) {
+    let max: number | null = null;
+    for (let k = first; k <= last; k++) {
+      const v = values[k];
+      if (v !== null && (max === null || v > max)) max = v;
+    }
+    return max;
+  }
+  const pos = ((t0 + t1) / 2 - curve.t0) / hop;
+  const k = Math.floor(pos);
+  const a = values[k];
+  const b = values[k + 1];
+  if (a == null || b == null) return a ?? b ?? null;
+  return a + (b - a) * (pos - k);
 }
 
 /** How much of a bar (starting at `t0`, `dt` long) lies in `region`, 0–1, eased at the ends. */
@@ -907,15 +818,15 @@ function drawOverlays(
   if (!morph) {
     if (overlay) {
       drawGuides(ctx, overlay, view, duration, w, h, dpr, color, 1, plot);
-      strokeCurve(ctx, curvePoints(overlay, view, w, h, plot), dpr, color, cased, 1);
+      strokeCurve(ctx, curvePoints(overlay, view, h, plot), dpr, color, cased, 1);
     }
     return;
   }
   const { from, t } = morph;
   if (from) drawGuides(ctx, from, view, duration, w, h, dpr, color, 1 - t, plot);
   if (overlay) drawGuides(ctx, overlay, view, duration, w, h, dpr, color, t, plot);
-  const a = from ? curvePoints(from, view, w, h, plot) : null;
-  const b = overlay ? curvePoints(overlay, view, w, h, plot) : null;
+  const a = from ? curvePoints(from, view, h, plot) : null;
+  const b = overlay ? curvePoints(overlay, view, h, plot) : null;
   const points = (a ?? b)!.map((_, i) => {
     const ya = a ? a[i] : h;
     const yb = b ? b[i] : h;
@@ -936,9 +847,11 @@ function drawSpectrogram(
   h: number,
   dpr: number,
   color: (name: string) => string,
+  /** Where the time axis ends (device px). */
+  plot: number,
 ) {
   const span = view.end - view.start;
-  const xAt = (t: number) => ((t - view.start) / span) * w;
+  const xAt = (t: number) => ((t - view.start) / span) * plot;
   ctx.imageSmoothingEnabled = true;
   for (const img of images) {
     if (!img) continue;
@@ -979,7 +892,7 @@ function drawGuides(
 ) {
   if (alpha <= 0) return;
   const span = view.end - view.start;
-  const xEnd = Math.min(plot, ((duration - view.start) / span) * w);
+  const xEnd = Math.min(plot, ((duration - view.start) / span) * plot);
   const yAt = overlayY(overlay, h);
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -1034,13 +947,13 @@ function drawLabel(
 }
 
 /** The curve's height at every `CURVE_STEP_PX` column across the view (NaN where it has no reading). */
-function curvePoints(overlay: Overlay, view: View, w: number, h: number, plot: number): number[] {
+function curvePoints(overlay: Overlay, view: View, h: number, plot: number): number[] {
   const span = view.end - view.start;
   const yAt = overlayY(overlay, h);
   const { t0, hop, values } = overlay.curve;
   const points: number[] = [];
   for (let x = 0; x <= plot; x += CURVE_STEP_PX) {
-    const pos = (view.start + (x / w) * span - t0) / hop;
+    const pos = (view.start + (x / plot) * span - t0) / hop;
     const i = Math.floor(pos);
     const a = values[i];
     const b = values[i + 1];

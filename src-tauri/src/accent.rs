@@ -14,29 +14,14 @@ const MIN_VIVID_SHARE: f64 = 0.03;
 /// The secondary hue is only a candidate with at least this share of the primary's weight.
 const SECONDARY_SHARE: f64 = 0.25;
 
-/// A cover's colours, each "#rrggbb", lifted for the dark UI.
-pub struct CoverColors {
-    /// The brighter, more saturated of the two dominant hues: the lane colour.
-    pub accent: String,
-    /// The dominant hues themselves, heaviest first (one or two; weighted by vividness as well as
-    /// area): the song-part palette's base.
-    pub palette: Vec<String>,
-}
-
 /// `None` when the cover has no real colour (or can't be read).
-pub fn cover_colors(path: &Path) -> Option<CoverColors> {
+pub fn cover_accent(path: &Path) -> Option<String> {
     let img = image::open(path).ok()?.thumbnail(64, 64).to_rgb8();
-    colors_of(img.pixels().map(|p| p.0))
+    accent_of(img.pixels().map(|p| p.0))
 }
 
-/// Just the accent (see `colors_of`).
-#[cfg(test)]
+/// The accent, "#rrggbb", from RGB pixels (see the module docs).
 pub fn accent_of(pixels: impl Iterator<Item = [u8; 3]>) -> Option<String> {
-    colors_of(pixels).map(|c| c.accent)
-}
-
-/// The colours from RGB pixels (see the module docs).
-pub fn colors_of(pixels: impl Iterator<Item = [u8; 3]>) -> Option<CoverColors> {
     // Per hue family: weight (saturation × value per vivid pixel) and the weighted colour sum.
     let mut bins = [(0.0f64, [0.0f64; 3]); HUE_BINS];
     let (mut total, mut vivid) = (0usize, 0usize);
@@ -70,11 +55,7 @@ pub fn colors_of(pixels: impl Iterator<Item = [u8; 3]>) -> Option<CoverColors> {
     if has_secondary && vividness(mean(secondary)) > vividness(pick) {
         pick = mean(secondary);
     }
-    let mut palette = vec![lift(mean(primary))];
-    if has_secondary {
-        palette.push(lift(mean(secondary)));
-    }
-    Some(CoverColors { accent: lift(pick), palette })
+    Some(lift(pick))
 }
 
 /// Readable on the dark UI: bright, saturated but not garish.

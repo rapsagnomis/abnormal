@@ -12,7 +12,7 @@ interface Props {
   onPairReference: (slot: Slot) => void;
 }
 
-/** Which two tracks are compared: the track (the one listened to) vs the pinned reference. */
+/** Which two tracks are compared: the mix (the one listened to) vs the pinned reference. */
 export function PairPicker(p: Props) {
   const [track, reference] = p.pair.slots;
   // The picks change on their own (Tab to another track, a pin): ring the one that moved.
@@ -24,13 +24,13 @@ export function PairPicker(p: Props) {
   const options = (current: Slot) => p.lanes.filter((l) => l.loaded || l.slot === current);
   return (
     <div className="pair-picker" style={pairColors(p.pair.labels)}>
-      <span className="scope-label">Compare</span>
+      <span className="scope-label">Mix</span>
       <select
         ref={trackRef}
         className="col-a"
         value={track}
         onChange={(e) => p.onPairTrack(Number(e.target.value) as Slot)}
-        title="The track being compared (and EQ-matched, auditioned, exported). Always the track you listen to: picking one here switches to it."
+        title="The mix: analysed against the reference, EQ-matched, auditioned and exported. Always the track you listen to: picking one here switches to it."
       >
         {options(track).map((l) => (
           <option key={l.slot} value={l.slot} disabled={l.slot === reference}>
@@ -38,13 +38,13 @@ export function PairPicker(p: Props) {
           </option>
         ))}
       </select>
-      <span className="pair-vs">vs</span>
+      <span className="scope-label pair-vs">Reference</span>
       <select
         ref={referenceRef}
         className="col-b"
         value={reference}
         onChange={(e) => p.onPairReference(Number(e.target.value) as Slot)}
-        title="The reference everything is compared with (pinned)"
+        title="The reference: the mix is compared with it (pinned)"
       >
         {options(reference).map((l) => (
           <option key={l.slot} value={l.slot}>

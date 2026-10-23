@@ -49,10 +49,6 @@ impl<'a> Stft<'a> {
         }
     }
 
-    pub fn bins(&self) -> usize {
-        self.power.len()
-    }
-
     /// Power spectrum of the frame starting at sample `start` (zero-padded past the end of the
     /// audio), into `self.power`.
     pub fn frame(&mut self, start: isize) {

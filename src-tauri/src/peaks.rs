@@ -3,7 +3,7 @@ use serde::Serialize;
 use crate::decode::AudioData;
 
 /// Downsampled waveform for display: the min/max sample across all channels per bucket.
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Peaks {
     pub buckets: usize,
     pub min: Vec<f32>,

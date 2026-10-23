@@ -1,6 +1,6 @@
 import type { AnalysisReport } from "./api";
 
-export type Tab = "loudness" | "dynamics" | "tonal" | "stereo" | "library";
+export type Tab = "loudness" | "dynamics" | "tonal" | "stereo";
 
 /** Streaming platforms commonly ask for a true-peak ceiling of −1 dBTP. */
 export const TRUE_PEAK_CEILING = -1;
@@ -101,6 +101,39 @@ const TONAL: Section[] = [
       get: (r: AnalysisReport) => r.spectrum.bands[i]?.level ?? null,
     })),
   },
+  {
+    heading: "Perceived · heard at matched loudness",
+    rows: [
+      {
+        label: "Sharpness",
+        unit: "acum",
+        hint: "How bright and piercing it sounds (DIN 45692, from Zwicker loudness): weighs high frequencies the way ears do. Median over the range; 1 acum = narrow noise at 1 kHz. Typical mixes 1.2–2.",
+        get: (r) => r.psycho?.sharpness ?? null,
+        digits: 2,
+      },
+      {
+        label: "Sharpness, peaks",
+        unit: "acum",
+        hint: "The sharpest 10 % of moments (90th percentile of 0.5 s blocks): where it gets piercing",
+        get: (r) => r.psycho?.sharpnessP90 ?? null,
+        digits: 2,
+      },
+      {
+        label: "Roughness",
+        unit: "asper",
+        hint: "Harshness from fast beating and modulation, 15–300 Hz (Daniel & Weber). Median of 200 ms frames; 1 asper = 1 kHz fully modulated at 70 Hz. Most music sits well below 0.5.",
+        get: (r) => r.psycho?.roughness ?? null,
+        digits: 2,
+      },
+      {
+        label: "Roughness, peaks",
+        unit: "asper",
+        hint: "The roughest 10 % of moments (90th percentile of frames): distortion, dense beating, gritty parts",
+        get: (r) => r.psycho?.roughnessP90 ?? null,
+        digits: 2,
+      },
+    ],
+  },
 ];
 
 const STEREO: Section[] = [
@@ -152,7 +185,7 @@ const STEREO: Section[] = [
   },
 ];
 
-type MetricTab = Exclude<Tab, "library">;
+type MetricTab = Tab;
 const ALL_SECTIONS: Record<MetricTab, Section[]> = { loudness: LOUDNESS, dynamics: DYNAMICS, tonal: TONAL, stereo: STEREO };
 
 /**
@@ -201,7 +234,7 @@ export const HEADLINES: Record<MetricTab, Headline[]> = {
   ],
 };
 
-/** Metric tables per tab, below the headlines (which aren't repeated); the Library tab has its own view. */
+/** Metric tables per tab, below the headlines (which aren't repeated). */
 export const SECTIONS: Record<MetricTab, Section[]> = Object.fromEntries(
   (Object.keys(ALL_SECTIONS) as MetricTab[]).map((tab) => {
     const shown = new Set(HEADLINES[tab].flatMap((h) => (h.kind === "metric" ? [h.row] : [])));

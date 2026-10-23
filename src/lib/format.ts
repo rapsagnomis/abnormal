@@ -29,3 +29,12 @@ export function tickStep(duration: number, widthPx: number, minPx = 70): number 
   const secPerPx = duration / Math.max(widthPx, 1);
   return steps.find((s) => s / secPerPx >= minPx) ?? steps[steps.length - 1];
 }
+
+/** A length, to the second: 222.4 → "3:42", 3725 → "1:02:05". */
+export function formatDuration(seconds: number): string {
+  const s = Math.round(Math.max(0, seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rest = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${rest}` : `${m}:${rest}`;
+}

@@ -1,6 +1,11 @@
 import type { ReactNode } from "react";
+import { StreamingMenu } from "./StreamingMenu";
+import type { PlatformId } from "../lib/streaming";
 
 interface Props {
+  platform: PlatformId | null;
+  onPlatform: (id: PlatformId | null) => void;
+  platformGains: { label: string; gain: number | null }[];
   matchEnabled: boolean;
   /** What loudness matching is based on, for the tooltip. */
   matchBasis: string;
@@ -18,7 +23,7 @@ interface Props {
   children: ReactNode;
 }
 
-/** How the compared pair is heard (loudness match, EQ audition), then export, in the top bar. */
+/** How the compared pair is heard (loudness match or a streaming preview, EQ audition), then export, in the top bar. */
 export function MatchControls(p: Props) {
   return (
     <div className="match-controls">
@@ -29,6 +34,7 @@ export function MatchControls(p: Props) {
       >
         Loudness Match
       </button>
+      <StreamingMenu platform={p.platform} onPlatform={p.onPlatform} gains={p.platformGains} />
       <button
         className={`toggle${p.eqOn ? " on" : ""}${p.eqBusy ? " busy" : ""}`}
         onClick={p.onToggleEq}

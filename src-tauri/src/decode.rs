@@ -103,6 +103,25 @@ pub fn decode_file(path: &Path) -> Result<AudioData> {
     Ok(AudioData { sample_rate, channels })
 }
 
+/// Identity of the audio itself, not the file: SHA-256 over the sample rate, channel count and
+/// decoded samples (first 128 bits, hex). Moving, renaming or retagging a file keeps it; any change
+/// to the sound gives a new one. Lossy files depend on the decoder's exact output.
+pub fn audio_id(audio: &AudioData) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(audio.sample_rate.to_le_bytes());
+    hash.update((audio.channels.len() as u32).to_le_bytes());
+    let mut bytes = Vec::with_capacity(1 << 16);
+    for channel in &audio.channels {
+        for chunk in channel.chunks(1 << 14) {
+            bytes.clear();
+            bytes.extend(chunk.iter().flat_map(|s| s.to_bits().to_le_bytes()));
+            hash.update(&bytes);
+        }
+    }
+    hash.finalize()[..16].iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Title, artist, album and embedded cover from a file's tags (ID3, Vorbis comments, …).
 #[derive(Default, Debug)]
 pub struct Tags {

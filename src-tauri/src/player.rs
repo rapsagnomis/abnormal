@@ -20,16 +20,60 @@ use crate::decode::AudioData;
 use crate::eq::{Biquad, Filter, Placement};
 use crate::fir;
 
-/// A and B, then up to six extra tracks to switch between (C–H).
-pub const SLOTS: usize = 8;
+/// A and B, then up to 24 extra tracks to switch between (C–Z).
+pub const SLOTS: usize = 26;
 const NONE: u64 = u64::MAX;
 /// Length of A/B crossfades and pause/resume fades.
 const FADE_SECONDS: f32 = 0.015;
+/// Length of the crossfade when a slot's track is replaced while playing (another version).
+const SWAP_SECONDS: f32 = 0.06;
+/// Times the audio callback retries the track lock before giving up on a buffer (a swap holds
+/// it only for a few atomic stores; a buffer of silence would click).
+const LOCK_SPINS: usize = 2000;
 /// Trim changes glide with a one-pole filter; this scales its coefficient relative to the fade step.
 const TRIM_SMOOTHING: f32 = 0.5;
 const UNITY_BITS: u32 = 0x3f80_0000; // 1.0f32
 /// Most EQ moves a track can be auditioned with (6 stereo moves, a width change, 3 side moves).
 pub const MAX_EQ_STAGES: usize = 12;
+
+/// Spotify's "Loud" normalisation limiter, as Spotify documents it: engages at −1 dB sample
+/// value, 5 ms attack, 100 ms decay. Stereo-linked, on the track after its trim.
+pub const LIMIT_CEILING_DB: f32 = -1.0;
+const LIMIT_ATTACK_SECONDS: f32 = 0.005;
+const LIMIT_RELEASE_SECONDS: f32 = 0.1;
+
+/// Peak limiter (no look-ahead): a level envelope rises towards the signal's peak with the attack
+/// time constant and falls with the release; the gain brings that envelope down to the ceiling.
+#[derive(Clone, Copy)]
+pub struct Limiter {
+    ceiling: f32,
+    attack: f32,
+    release: f32,
+    envelope: f32,
+}
+
+impl Limiter {
+    pub fn new(rate: f32) -> Self {
+        Self {
+            ceiling: 10f32.powf(LIMIT_CEILING_DB / 20.0),
+            attack: (-1.0 / (LIMIT_ATTACK_SECONDS * rate)).exp(),
+            release: (-1.0 / (LIMIT_RELEASE_SECONDS * rate)).exp(),
+            envelope: 0.0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.envelope = 0.0;
+    }
+
+    pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let peak = l.abs().max(r.abs());
+        let coef = if peak > self.envelope { self.attack } else { self.release };
+        self.envelope = peak + (self.envelope - peak) * coef;
+        let gain = if self.envelope > self.ceiling { self.ceiling / self.envelope } else { 1.0 };
+        (l * gain, r * gain)
+    }
+}
 
 /// Playback EQ for one track. Filters run even while disabled so switching it on is a crossfade
 /// between warm signals, not a transient.
@@ -96,7 +140,6 @@ impl PlaybackBuffer {
         Ok(Self { samples: stereo, frames })
     }
 
-    #[cfg(test)]
     pub fn frames(&self) -> u64 {
         self.frames
     }
@@ -117,6 +160,8 @@ impl PlaybackBuffer {
 struct Loaded {
     track: Option<Arc<PlaybackBuffer>>,
     alt: Option<Arc<PlaybackBuffer>>,
+    /// The track (and alternate) this one replaced, faded out under it (see `SWAP_SECONDS`).
+    outgoing: Option<(Arc<PlaybackBuffer>, Option<Arc<PlaybackBuffer>>)>,
 }
 
 /// State shared between the UI-facing commands and the audio callback.
@@ -128,6 +173,14 @@ pub struct Shared {
     loop_enabled: [AtomicBool; SLOTS],
     /// Per-track gain trim (linear, stored as f32 bits), e.g. for loudness matching.
     trims: [AtomicU32; SLOTS],
+    /// Player mode: only the track listened to moves; when it ends, the next loaded track in
+    /// `queue` starts from the top (like an ordinary player) instead of all playing together.
+    player_mode: AtomicBool,
+    /// Lane order for player mode (slots), `queue_len` of them.
+    queue: [AtomicUsize; SLOTS],
+    queue_len: AtomicUsize,
+    /// Per track: run the trimmed signal through the limiter (Spotify Loud preview).
+    limit: [AtomicBool; SLOTS],
     /// App-wide output volume (linear, 0–1, stored as f32 bits), applied after the trims.
     volume: AtomicU32,
     /// Written only by the audio callback.
@@ -141,6 +194,8 @@ pub struct Shared {
     alt_enabled: [AtomicBool; SLOTS],
     /// Bumped by each alternate render, so a slower earlier one can't replace a newer one.
     alt_generation: [AtomicU64; SLOTS],
+    /// Bumped whenever a slot's track is replaced, so the callback starts its crossfade.
+    swaps: [AtomicU64; SLOTS],
     /// Peak level of each track over the last callback (linear, f32 bits), after its trim and EQ
     /// but before the A/B switch and volume: what it would play at if switched to. 0 when paused.
     meters: [AtomicU32; SLOTS],
@@ -163,13 +218,17 @@ pub struct Transport {
 }
 
 impl Shared {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             device_rate: AtomicU32::new(0),
             playing: AtomicBool::new(false),
             active: AtomicUsize::new(0),
             loop_enabled: [const { AtomicBool::new(false) }; SLOTS],
             trims: [const { AtomicU32::new(UNITY_BITS) }; SLOTS],
+            player_mode: AtomicBool::new(false),
+            queue: [const { AtomicUsize::new(0) }; SLOTS],
+            queue_len: AtomicUsize::new(0),
+            limit: [const { AtomicBool::new(false) }; SLOTS],
             volume: AtomicU32::new(UNITY_BITS),
             positions: [const { AtomicU64::new(0) }; SLOTS],
             seek_requests: [const { AtomicU64::new(NONE) }; SLOTS],
@@ -178,6 +237,7 @@ impl Shared {
             tracks: Mutex::new(Default::default()),
             alt_enabled: [const { AtomicBool::new(false) }; SLOTS],
             alt_generation: [const { AtomicU64::new(0) }; SLOTS],
+            swaps: [const { AtomicU64::new(0) }; SLOTS],
             meters: [const { AtomicU32::new(0) }; SLOTS],
             eq: Mutex::new([EqSettings::default(); SLOTS]),
             eq_version: AtomicU64::new(0),
@@ -193,13 +253,21 @@ impl Shared {
     }
 
     pub fn set_track(&self, slot: usize, buffer: Option<PlaybackBuffer>) {
+        self.set_shared_track(slot, buffer.map(Arc::new), 0.0);
+    }
+
+    /// Put a (possibly cached, shared) buffer in a slot, playing from `start` seconds: a version
+    /// swapped in while playing carries on at the same time, crossfaded from the one it replaces.
+    pub fn set_shared_track(&self, slot: usize, buffer: Option<Arc<PlaybackBuffer>>, start: f64) {
         let old = {
             let mut tracks = self.tracks.lock().unwrap();
             self.loop_start[slot].store(NONE, Ordering::Relaxed);
             self.loop_end[slot].store(NONE, Ordering::Relaxed);
-            self.seek_requests[slot].store(0, Ordering::Relaxed);
+            self.seek_requests[slot].store(self.to_frames(start.max(0.0)), Ordering::Relaxed);
             self.alt_generation[slot].fetch_add(1, Ordering::Relaxed);
-            std::mem::replace(&mut tracks[slot], Loaded { track: buffer.map(Arc::new), alt: None })
+            let outgoing = buffer.as_ref().and(tracks[slot].track.clone()).map(|t| (t, tracks[slot].alt.clone()));
+            self.swaps[slot].fetch_add(1, Ordering::Release);
+            std::mem::replace(&mut tracks[slot], Loaded { track: buffer, alt: None, outgoing })
         };
         // Old buffers are dropped here, outside the lock and off the audio thread.
         drop(old);
@@ -231,6 +299,20 @@ impl Shared {
     pub fn set_trim_db(&self, slot: usize, db: f64) {
         let linear = 10f32.powf(db as f32 / 20.0);
         self.trims[slot].store(linear.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Player mode on or off, with the lanes' order to play them in.
+    pub fn set_player_mode(&self, on: bool, order: &[usize]) {
+        let order: Vec<usize> = order.iter().copied().filter(|&s| s < SLOTS).take(SLOTS).collect();
+        for (slot, &s) in self.queue.iter().zip(&order) {
+            slot.store(s, Ordering::Relaxed);
+        }
+        self.queue_len.store(order.len(), Ordering::Relaxed);
+        self.player_mode.store(on, Ordering::Relaxed);
+    }
+
+    pub fn set_limit(&self, slot: usize, on: bool) {
+        self.limit[slot].store(on, Ordering::Relaxed);
     }
 
     /// Output volume for everything, linear; clamped to 0–1 so it only ever attenuates.
@@ -307,7 +389,7 @@ impl Shared {
 }
 
 /// Per-stream state owned by the audio callback.
-struct Mixer {
+pub(crate) struct Mixer {
     shared: Arc<Shared>,
     out_channels: usize,
     fade_step: f32,
@@ -315,6 +397,7 @@ struct Mixer {
     gains: [f32; SLOTS],
     /// Smoothed per-track trims.
     trims: [f32; SLOTS],
+    limiters: [Limiter; SLOTS],
     /// Smoothed output volume.
     volume: f32,
     eq: [EqSettings; SLOTS],
@@ -324,13 +407,49 @@ struct Mixer {
     eq_mix: [f32; SLOTS],
     /// Smoothed share of the alternate rendering per track, 0–1.
     alt_mix: [f32; SLOTS],
+    /// Last `Shared::swaps` seen per slot.
+    swaps_seen: [u64; SLOTS],
+    /// Share of the new track while crossfading from a replaced one, 0–1 (1: done).
+    swap_mix: [f32; SLOTS],
+    /// Where the replaced track carries on during its fade-out, frames.
+    outgoing_pos: [u64; SLOTS],
+    swap_step: f32,
 }
 
 impl Mixer {
-    fn render(&mut self, out: &mut [f32]) {
+    pub(crate) fn new(shared: Arc<Shared>, out_channels: usize, rate: u32) -> Self {
+        Self {
+            shared,
+            out_channels,
+            fade_step: 1.0 / (FADE_SECONDS * rate as f32),
+            master: 0.0,
+            gains: std::array::from_fn(|i| if i == 0 { 1.0 } else { 0.0 }),
+            trims: [1.0; SLOTS],
+            limiters: [Limiter::new(rate as f32); SLOTS],
+            volume: 1.0,
+            eq: [EqSettings::default(); SLOTS],
+            eq_state: [[[[0.0; 2]; 2]; MAX_EQ_STAGES]; SLOTS],
+            eq_version: 0,
+            eq_mix: [0.0; SLOTS],
+            alt_mix: [0.0; SLOTS],
+            swaps_seen: [0; SLOTS],
+            swap_mix: [1.0; SLOTS],
+            outgoing_pos: [0; SLOTS],
+            swap_step: 1.0 / (SWAP_SECONDS * rate as f32),
+        }
+    }
+
+    pub(crate) fn render(&mut self, out: &mut [f32]) {
         let shared = &self.shared;
-        // Never block the audio thread: if a track is being swapped, output one buffer of silence.
-        let Ok(tracks) = shared.tracks.try_lock() else {
+        // Never block the audio thread for long: a swap holds the lock only briefly, so retry a
+        // little before giving up on this buffer (silence).
+        let Some(tracks) = (0..LOCK_SPINS).find_map(|_| {
+            let t = shared.tracks.try_lock().ok();
+            if t.is_none() {
+                std::hint::spin_loop();
+            }
+            t
+        }) else {
             out.fill(0.0);
             return;
         };
@@ -352,14 +471,29 @@ impl Mixer {
             }
         }
 
+        // A replaced track fades out from exactly where it was (the last position written here).
+        let audible = shared.playing.load(Ordering::Relaxed) || self.master > 0.0;
+        for i in 0..SLOTS {
+            let swaps = shared.swaps[i].load(Ordering::Acquire);
+            if swaps != self.swaps_seen[i] {
+                self.swaps_seen[i] = swaps;
+                self.outgoing_pos[i] = shared.positions[i].load(Ordering::Relaxed);
+                self.swap_mix[i] = if audible && tracks[i].outgoing.is_some() { 0.0 } else { 1.0 };
+            }
+        }
+
         let mut pos: [u64; SLOTS] = std::array::from_fn(|i| {
             match shared.seek_requests[i].swap(NONE, Ordering::Relaxed) {
                 NONE => shared.positions[i].load(Ordering::Relaxed),
                 p => p,
             }
         });
-        let playing = shared.playing.load(Ordering::Relaxed);
-        let active = shared.active.load(Ordering::Relaxed);
+        let mut playing = shared.playing.load(Ordering::Relaxed);
+        let mut active = shared.active.load(Ordering::Relaxed);
+        let player_mode = shared.player_mode.load(Ordering::Relaxed);
+        let queue: Vec<usize> = (0..shared.queue_len.load(Ordering::Relaxed).min(SLOTS))
+            .map(|i| shared.queue[i].load(Ordering::Relaxed))
+            .collect();
         let looping: [bool; SLOTS] = std::array::from_fn(|i| shared.loop_enabled[i].load(Ordering::Relaxed));
         let alt_targets: [f32; SLOTS] = std::array::from_fn(|i| {
             let on = shared.alt_enabled[i].load(Ordering::Relaxed) && tracks[i].alt.is_some();
@@ -368,6 +502,7 @@ impl Mixer {
         let trim_targets: [f32; SLOTS] =
             std::array::from_fn(|i| f32::from_bits(shared.trims[i].load(Ordering::Relaxed)));
         let volume_target = f32::from_bits(shared.volume.load(Ordering::Relaxed));
+        let limit: [bool; SLOTS] = std::array::from_fn(|i| shared.limit[i].load(Ordering::Relaxed));
         let loops: [(u64, u64); SLOTS] = std::array::from_fn(|i| {
             (shared.loop_start[i].load(Ordering::Relaxed), shared.loop_end[i].load(Ordering::Relaxed))
         });
@@ -388,14 +523,37 @@ impl Mixer {
                     self.trims[i] += (trim_targets[i] - self.trims[i]) * TRIM_SMOOTHING * self.fade_step;
                     let Some(track) = &tracks[i].track else { continue };
                     self.alt_mix[i] = approach(self.alt_mix[i], alt_targets[i], self.fade_step);
-                    if pos[i] < track.frames {
+                    // In player mode the others hold still (finishing a fade-out first).
+                    let moving = !player_mode || i == active || self.gains[i] > 0.0;
+                    if moving && pos[i] < track.frames {
                         let idx = pos[i] as usize * 2;
-                        let g = self.gains[i] * self.trims[i] * self.volume * self.master;
+                        let g = self.gains[i] * self.volume * self.master;
                         let (mut sl, mut sr) = (track.samples[idx], track.samples[idx + 1]);
                         if let Some(alt) = tracks[i].alt.as_ref().filter(|_| self.alt_mix[i] > 0.0) {
                             let m = self.alt_mix[i];
                             sl += (alt.samples[idx] - sl) * m;
                             sr += (alt.samples[idx + 1] - sr) * m;
+                        }
+                        // Just replaced (another version): crossfade from the old track, which
+                        // carries on from where it was.
+                        if self.swap_mix[i] < 1.0 {
+                            let x = self.swap_mix[i];
+                            let (mut ol, mut or) = (0.0, 0.0);
+                            if let Some((old, old_alt)) = &tracks[i].outgoing
+                                && self.outgoing_pos[i] < old.frames
+                            {
+                                let o = self.outgoing_pos[i] as usize * 2;
+                                (ol, or) = (old.samples[o], old.samples[o + 1]);
+                                if let Some(alt) = old_alt.as_ref().filter(|a| self.alt_mix[i] > 0.0 && self.outgoing_pos[i] < a.frames) {
+                                    let m = self.alt_mix[i];
+                                    ol += (alt.samples[o] - ol) * m;
+                                    or += (alt.samples[o + 1] - or) * m;
+                                }
+                            }
+                            sl = ol + (sl - ol) * x;
+                            sr = or + (sr - or) * x;
+                            self.outgoing_pos[i] += 1;
+                            self.swap_mix[i] = approach(x, 1.0, self.swap_step);
                         }
                         if self.eq[i].count > 0 {
                             let (wl, wr) = run_eq(&self.eq[i], &mut self.eq_state[i], sl, sr);
@@ -405,7 +563,14 @@ impl Mixer {
                             sl += (wl - sl) * m;
                             sr += (wr - sr) * m;
                         }
-                        peaks[i] = peaks[i].max(sl.abs().max(sr.abs()) * self.trims[i] * self.master);
+                        sl *= self.trims[i];
+                        sr *= self.trims[i];
+                        if limit[i] {
+                            (sl, sr) = self.limiters[i].process(sl, sr);
+                        } else {
+                            self.limiters[i].reset();
+                        }
+                        peaks[i] = peaks[i].max(sl.abs().max(sr.abs()) * self.master);
                         l += sl * g;
                         r += sr * g;
                         pos[i] += 1;
@@ -413,6 +578,21 @@ impl Mixer {
                     let (ls, le) = loops[i];
                     if looping[i] && le != NONE && pos[i] >= le.min(track.frames) {
                         pos[i] = ls;
+                    } else if player_mode && i == active && playing && pos[i] >= track.frames {
+                        // Track over: on to the next loaded lane, from its start; none left, stop.
+                        let at = queue.iter().position(|&s| s == i);
+                        let next = at.and_then(|at| queue[at + 1..].iter().copied().find(|&s| tracks[s].track.is_some()));
+                        match next {
+                            Some(next) => {
+                                active = next;
+                                shared.active.store(next, Ordering::Relaxed);
+                                pos[next] = 0;
+                            }
+                            None => {
+                                playing = false;
+                                shared.playing.store(false, Ordering::Relaxed);
+                            }
+                        }
                     }
                 }
                 match frame {
@@ -469,20 +649,7 @@ pub fn start() -> (Arc<Shared>, Result<u32>) {
                 let config: cpal::StreamConfig = device.default_output_config()?.into();
                 let rate = config.sample_rate;
                 thread_shared.device_rate.store(rate, Ordering::Relaxed);
-                let mut mixer = Mixer {
-                    shared: thread_shared.clone(),
-                    out_channels: config.channels as usize,
-                    fade_step: 1.0 / (FADE_SECONDS * rate as f32),
-                    master: 0.0,
-                    gains: std::array::from_fn(|i| if i == 0 { 1.0 } else { 0.0 }),
-                    trims: [1.0; SLOTS],
-                    volume: 1.0,
-                    eq: [EqSettings::default(); SLOTS],
-                    eq_state: [[[[0.0; 2]; 2]; MAX_EQ_STAGES]; SLOTS],
-                    eq_version: 0,
-                    eq_mix: [0.0; SLOTS],
-                    alt_mix: [0.0; SLOTS],
-                };
+                let mut mixer = Mixer::new(thread_shared.clone(), config.channels as usize, rate);
                 let stream = device.build_output_stream::<f32, _, _>(
                     config,
                     move |data, _| mixer.render(data),

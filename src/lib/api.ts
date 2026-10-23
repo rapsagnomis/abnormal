@@ -1,16 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 
-/** A playback slot: 0 = A (your track), 1 = B (the reference), 2–7 = extra tracks. */
-export type Slot = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+/** A playback slot: 0 = A (your track), 1 = B (the reference), 2–25 = extra tracks. */
+export type Slot = number;
 /** A side of the compared pair: 0 = the track, 1 = the reference (any two slots, see `pair.ts`). */
 export type ABSlot = 0 | 1;
 export const SLOTS: ABSlot[] = [0, 1];
 /** Engine slots; keep in step with `SLOTS` in player.rs. */
-export const ALL_SLOTS: Slot[] = [0, 1, 2, 3, 4, 5, 6, 7];
+export const ALL_SLOTS: Slot[] = Array.from({ length: 26 }, (_, i) => i);
 /** Engine slots the extra tracks can take. */
-export const EXTRA_SLOTS: Slot[] = [2, 3, 4, 5, 6, 7];
-/** Labels in display order: A, B, then the extra tracks as C, D, … in the order they were added. */
-export const SLOT_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
+export const EXTRA_SLOTS: Slot[] = ALL_SLOTS.slice(2);
+/** Labels in display order: A, B, then the extra tracks as C, D, … Z in the order they were added. */
+export const SLOT_LABELS: readonly string[] = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
 
 export interface Peaks {
   buckets: number;
@@ -34,8 +34,8 @@ export interface TrackInfo {
   cover: string | null;
   /** The cover's colour ("#rrggbb"), used for the lane in place of its letter's; null without one. */
   accent: string | null;
-  /** The cover's one or two dominant colours: the base of the song-part palette (empty without). */
-  palette: string[];
+  /** Identity of the decoded audio: markers follow it when the file is moved or renamed. */
+  audioId: string;
 }
 
 export interface Transport {
@@ -159,6 +159,35 @@ export interface AnalysisReport {
   spectrum: SpectrumReport;
   stereo: StereoReport;
   features: Features;
+  /** Sharpness and roughness from hearing models, heard at matched loudness (75 dB SPL). */
+  psycho: PsychoStats | null;
+}
+
+export interface PsychoStats {
+  /** DIN 45692 sharpness, acum: median over 0.5 s blocks, and the sharpest 10 %. */
+  sharpness: number | null;
+  sharpnessP90: number | null;
+  /** Daniel & Weber roughness, asper: median over 200 ms frames, and the roughest 10 %. */
+  roughness: number | null;
+  roughnessP90: number | null;
+  /** Zwicker loudness at the listening level, sone (median). */
+  loudness: number | null;
+}
+
+/** Where tracks sit within the library for one mix quality (see `standing.rs`). */
+export interface LibraryStanding {
+  key: string;
+  label: string;
+  unit: string;
+  group: string;
+  /** What a higher value means. */
+  higher: string;
+  /** Library values at 0, 5, …, 100 %. */
+  quantiles: number[];
+  /** Per given track (mix, reference): value and percentile 0–100. */
+  values: (number | null)[];
+  percentiles: (number | null)[];
+  count: number;
 }
 
 export interface LibraryStatus {
@@ -197,37 +226,36 @@ export interface LibraryMatch extends LibraryTrack {
   stereo: number | null;
 }
 
-/** A song part from the structure model (All-In-One). */
-export interface StructureSegment {
-  start: number;
-  end: number;
-  /** "start" / "end" (silence), "intro", "verse", "chorus", "bridge", "inst", "solo", "break", "outro". */
-  label: string;
+/** A timestamped note on a file, kept across sessions. */
+export interface Marker {
+  /** Seconds from the start. */
+  time: number;
+  note: string;
 }
 
-export interface SongStructure {
-  bpm: number | null;
-  beats: number[];
-  /** First beat of each bar. */
-  downbeats: number[];
-  beatPositions: number[];
-  segments: StructureSegment[];
-  /** The segments are the user's corrections rather than what was detected. */
-  edited: boolean;
+/** A lane's song: its versions (file paths), the one in front (heard, analysed, shown) and the
+ *  name given to the song ("" = none: the front version's title is shown). */
+export interface LaneVersions {
+  name: string;
+  versions: string[];
+  front: number;
 }
 
-export interface StructureSetup {
-  installed: boolean;
-  installing: boolean;
-  step: string | null;
-  error: string | null;
-}
-
-/** `structure` event: an analysis finished (or failed). */
-export interface StructureOutcome {
+/** Saved lanes, in order (`sessions.rs`). */
+export interface Session {
   path: string;
-  structure: SongStructure | null;
-  error: string | null;
+  /** The file's name without extension. */
+  name: string;
+  lanes: LaneVersions[];
+}
+
+export interface RecentSession {
+  path: string;
+  name: string;
+  /** Number of lanes when last saved or opened. */
+  tracks: number;
+  /** Unix seconds. */
+  used: number;
 }
 
 /** Headless Deemix (Deezer search and downloads) state. */
@@ -339,16 +367,6 @@ export interface Exported {
   peakDb: number;
 }
 
-/** A detected song section; sections with the same label sound alike. */
-export interface Section {
-  start: number;
-  end: number;
-  /** 0 = first kind of section heard, 1 = the next new one, … */
-  label: number;
-  /** Mean power relative to the whole track, dB. */
-  level: number;
-}
-
 /** Per-band share of the moment's energy over time (masking view). */
 export interface BandActivity {
   /** Band edges, Hz. */
@@ -365,16 +383,24 @@ export const SPECTROGRAM_HZ = [30, 20000] as const;
 /** Spectrogram bytes map linearly from this level (0) to 0 dB (255). */
 export const SPECTROGRAM_FLOOR_DB = -120;
 
-export const AUDIO_EXTENSIONS = ["mp3", "flac", "wav"];
+export const AUDIO_EXTENSIONS = ["mp3", "flac", "wav", "aif", "aiff", "aifc", "m4a", "aac"];
 
 export const isAudioFile = (path: string) =>
   AUDIO_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
+
+export const SESSION_EXTENSION = "abnormal";
+
+export const isSessionFile = (path: string) => path.split(".").pop()?.toLowerCase() === SESSION_EXTENSION;
 
 export const api = {
   audioStatus: () => invoke<AudioStatus>("audio_status"),
   /** Files opened from Finder since the last call. */
   takeOpenedFiles: () => invoke<string[]>("take_opened_files"),
-  loadTrack: (slot: Slot, path: string) => invoke<TrackInfo>("load_track", { slot, path }),
+  /** Load a file into a slot, playing from `at` seconds (a prepared version swaps in at once). */
+  loadTrack: (slot: Slot, path: string, at: number | null = null) => invoke<TrackInfo>("load_track", { slot, path, at }),
+  /** Keep these files prepared for switching (decoded and analysed in the background); each one
+   *  ready is announced as a `version-prepared` event. Returns the ones already ready. */
+  prepareVersions: (paths: string[]) => invoke<string[]>("prepare_versions", { paths }),
   unloadTrack: (slot: Slot) => invoke<void>("unload_track", { slot }),
   setPlaying: (playing: boolean) => invoke<void>("set_playing", { playing }),
   setActive: (slot: Slot) => invoke<void>("set_active", { slot }),
@@ -394,6 +420,20 @@ export const api = {
     invoke<Peaks>("range_peaks", { slot, start, end, buckets }),
   setTrims: (db: number[]) => invoke<void>("set_trims", { db }),
   /** App-wide output volume, linear 0–1. */
+  /** Player mode: tracks play one after another in `order` (lane order) instead of together. */
+  setPlayerMode: (on: boolean, order: Slot[]) => invoke<void>("set_player_mode", { on, order }),
+  /** Per slot: run it through Spotify Loud's limiter. */
+  setLimiters: (on: boolean[]) => invoke<void>("set_limiters", { on }),
+  /** A track's markers: found by its audio, else by its path (a re-bounce over the same file). */
+  markers: (audioId: string, path: string) => invoke<Marker[]>("markers", { audioId, path }),
+  saveMarkers: (audioId: string, path: string, markers: Marker[]) => invoke<void>("save_markers", { audioId, path, markers }),
+  /** Save the lanes (in order, with their versions) as a session; also remembered as recent. */
+  saveSession: (path: string, lanes: LaneVersions[]) => invoke<Session>("save_session", { path, lanes }),
+  openSession: (path: string) => invoke<Session>("open_session", { path }),
+  recentSessions: () => invoke<RecentSession[]>("recent_sessions"),
+  clearRecentSessions: () => invoke<void>("clear_recent_sessions"),
+  /** Write the notes recap to a .md file. */
+  writeNotes: (path: string, contents: string) => invoke<void>("write_notes", { path, contents }),
   setVolume: (gain: number) => invoke<void>("set_volume", { gain }),
   setEq: (slot: Slot, filters: EqFilter[], enabled: boolean) => invoke<void>("set_eq", { slot, filters, enabled }),
   /** Spectrum of the ~0.4 s up to `seconds` on a track, normalised by its loudness like the long-term one; null if silent. */
@@ -402,7 +442,6 @@ export const api = {
   /** `rows × columns` bytes, row 0 = highest frequency. */
   spectrogram: (slot: Slot, start: number, end: number, columns: number, rows: number) =>
     invoke<ArrayBuffer>("spectrogram", { slot, start, end, columns, rows }).then((b) => new Uint8Array(b)),
-  sections: (slot: Slot) => invoke<Section[]>("sections", { slot }),
   bandActivity: (slot: Slot, region: Region | null) =>
     invoke<BandActivity>("band_activity", { slot, range: region ? [region.start, region.end] : null }),
   /** EQ match of the track towards the reference (`slots`), over each one's range (null = whole track). */
@@ -426,16 +465,12 @@ export const api = {
   proQTemplate: () => invoke<string | null>("pro_q_template"),
   libraryStatus: () => invoke<LibraryStatus>("library_status"),
   rescanLibrary: () => invoke<void>("rescan_library"),
+  /** Percentiles of the given tracks within the library; `near` limits it to the closest tracks. */
+  libraryStanding: (tracks: ({ features: Features; integrated: number | null } | null)[], near: number | null) =>
+    invoke<LibraryStanding[]>("library_standing", { tracks, near }),
   similarTracks: (features: Features, exclude: string[], weights: MatchWeights, limit: number) =>
     invoke<LibraryMatch[]>("similar_tracks", { features, exclude, weights, limit }),
   searchLibrary: (query: string, limit: number) => invoke<LibraryTrack[]>("search_library", { query, limit }),
-  structureStatus: () => invoke<StructureSetup>("structure_status"),
-  structureInstall: () => invoke<void>("structure_install"),
-  /** Cached structure, or null (then it's queued; the result comes as a `structure` event). */
-  songStructure: (path: string) => invoke<SongStructure | null>("song_structure", { path }),
-  saveStructureEdit: (path: string, segments: StructureSegment[]) =>
-    invoke<SongStructure>("save_structure_edit", { path, segments }),
-  resetStructureEdit: (path: string) => invoke<SongStructure | null>("reset_structure_edit", { path }),
   deezerConnect: () => invoke<DeezerStatus>("deezer_connect"),
   deezerLogin: (arl: string) => invoke<DeezerStatus>("deezer_login", { arl }),
   deezerSearch: (query: string, limit: number) => invoke<DeezerTrack[]>("deezer_search", { query, limit }),

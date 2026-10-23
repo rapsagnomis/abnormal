@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { SkeletonRows } from "./SkeletonRows";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../lib/api";
-import type { ABSlot, DeezerStatus, DeezerTrack, DownloadItem, DownloadKind } from "../lib/api";
+import type { DeezerStatus, DeezerTrack, DownloadItem, DownloadKind } from "../lib/api";
 import { formatTime } from "../lib/format";
-import { LoadButtons } from "./LoadButtons";
+import { LoadMenu, LoadTargetsContext } from "./LoadMenu";
 
 const LIMIT = 25;
 /** Deezer is a network round trip, so wait for a longer pause in typing than the local search. */
@@ -14,14 +14,11 @@ const MIN_QUERY = 2;
 
 interface Props {
   query: string;
-  /** Paths of the tracks loaded in A and B. */
-  paths: [string | null, string | null];
-  onLoad: (side: ABSlot, path: string) => void;
 }
 
 /** Deezer search results with download buttons, through the headless Deemix server; once a
- *  track is downloaded its row loads it into A or B. */
-export function DeezerResults({ query, paths, onLoad }: Props) {
+ *  track is downloaded its row loads it into any lane. */
+export function DeezerResults({ query }: Props) {
   const [status, setStatus] = useState<DeezerStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tracks, setTracks] = useState<DeezerTrack[] | null>(null);
@@ -98,8 +95,6 @@ export function DeezerResults({ query, paths, onLoad }: Props) {
                   pending={pending}
                   canDownload={status.loggedIn}
                   onDownload={download}
-                  paths={paths}
-                  onLoad={onLoad}
                 />
               ))}
             </ol>
@@ -176,8 +171,6 @@ function DeezerRow({
   pending,
   canDownload,
   onDownload,
-  paths,
-  onLoad,
 }: {
   track: DeezerTrack;
   /** Position in the list, for the staggered entrance. */
@@ -186,7 +179,7 @@ function DeezerRow({
   pending: string[];
   canDownload: boolean;
   onDownload: (kind: DownloadKind, id: number) => void;
-} & Pick<Props, "paths" | "onLoad">) {
+}) {
   // The latest queue entry for this track or its album, if it was downloaded this way.
   const latest = (kind: DownloadKind, id: number) => {
     const found = downloads.filter((d) => d.kind === kind && d.id === id);
@@ -194,8 +187,14 @@ function DeezerRow({
   };
   // This track's file, whether it came alone or with its album.
   const file = downloads.flatMap((d) => d.files).find((f) => f.trackId === t.id)?.path;
+  const targets = useContext(LoadTargetsContext);
   return (
-    <li className="match deezer-row" style={{ "--i": index } as CSSProperties}>
+    <li
+      className={`match deezer-row${file ? " draggable" : ""}`}
+      style={{ "--i": index } as CSSProperties}
+      title={file ? "Drag onto a track to load it there" : undefined}
+      onPointerDown={(e) => file && targets?.drag({ path: file, title: `${t.title} – ${t.artist}`, cover: t.cover || null }, e)}
+    >
       {t.cover ? <img className="cover" src={t.cover} alt="" /> : <span className="cover" />}
       <div className="match-body">
         <div className="match-title">{t.title}</div>
@@ -204,7 +203,7 @@ function DeezerRow({
         </div>
       </div>
       <div className="match-load">
-        {file && <LoadButtons path={file} paths={paths} onLoad={onLoad} />}
+        {file && <LoadMenu path={file} />}
         {(
           [
             ["track", t.id],

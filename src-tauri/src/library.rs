@@ -17,7 +17,7 @@ use crate::similarity::{self, Features, Spread};
 
 /// Bump when `Features` or the analysis behind them change, to re-analyse the whole library.
 const DB_VERSION: u32 = 1;
-const EXTENSIONS: [&str; 3] = ["mp3", "flac", "wav"];
+const EXTENSIONS: [&str; 8] = ["mp3", "flac", "wav", "aif", "aiff", "aifc", "m4a", "aac"];
 /// Decoded tracks are held in memory while analysed (~100 MB for 5 min of 44.1 kHz stereo), so
 /// the number of parallel workers is capped.
 const MAX_WORKERS: usize = 4;
@@ -348,6 +348,32 @@ impl Library {
             .collect()
     }
 
+    /// Where `inputs` sit among the library's tracks (see `standing.rs`): the whole library, or
+    /// with `near`, only the `near` tracks that sound most like the first input. Copies count once,
+    /// and the inputs themselves (if they're in the library) are left out.
+    pub fn standing(&self, inputs: &[Option<crate::standing::Input>], near: Option<usize>) -> Vec<crate::standing::Standing> {
+        let db = self.db.lock().unwrap();
+        let own: HashSet<u64> = inputs.iter().flatten().map(|t| t.features.identity()).collect();
+        let mut seen = HashSet::new();
+        let mut tracks: Vec<(&Features, Option<f64>)> = db
+            .tracks
+            .values()
+            .filter_map(|e| Some((e.features.as_ref()?, e.summary.as_ref().and_then(|s| s.integrated))))
+            .filter(|(f, _)| !own.contains(&f.identity()) && seen.insert(f.identity()))
+            .collect();
+        if let (Some(n), Some(Some(first))) = (near, inputs.first()) {
+            let spread = Spread::of(db.tracks.values().filter_map(|e| e.features.as_ref()));
+            let weights = [0.5, 0.3, 0.2];
+            let mut scored: Vec<(f64, (&Features, Option<f64>))> = tracks
+                .into_iter()
+                .filter_map(|t| Some((similarity::combine(&similarity::distances(&first.features, t.0, &spread), &weights)?, t)))
+                .collect();
+            scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+            tracks = scored.into_iter().take(n).map(|(_, t)| t).collect();
+        }
+        crate::standing::standings(inputs, &tracks)
+    }
+
     /// Analysed tracks whose path below the root contains every word of `query` (any case),
     /// sorted by path, one per song: of several copies, the first matching one is listed.
     pub fn search(&self, query: &str, limit: usize) -> Vec<LibraryTrack> {
@@ -482,7 +508,7 @@ fn analyze_file(path: &Path, size: u64, modified: u64) -> Entry {
         Ok(a) => a,
         Err(e) => return failed(format!("{e:#}")),
     };
-    match crate::analyze_range(&audio, 0, audio.frames(), false) {
+    match crate::analyze_range(&audio, 0, audio.frames(), false, false) {
         Ok(r) => Entry {
             size,
             modified,

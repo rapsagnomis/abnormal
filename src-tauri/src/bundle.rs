@@ -1,6 +1,7 @@
 //! Export as Zip: the version in front of each lane, written into one zip archive as WAV
 //! (24-bit), FLAC (24-bit) or MP3 (320 kb/s CBR), tagged with its title, the artist, the
-//! album (the archive's name) and its track number.
+//! album (the archive's name) and its track number. A cover, when given, is embedded in FLAC
+//! and MP3 files as their front cover and also put in the archive as `cover.jpg` / `cover.png`.
 //!
 //! Each file is decoded and encoded from the source, except an MP3 exported as MP3: its frames
 //! are copied as they are (no second lossy generation) and only its tags are replaced.
@@ -21,6 +22,67 @@ use crate::wav;
 
 /// Files encoded at once (each holds a decoded track in memory).
 const WORKERS: usize = 4;
+/// A cover larger than this (px, either side) is scaled down to it before being embedded.
+const COVER_MAX: u32 = 2000;
+/// FLAC's and ID3's picture type for the front cover.
+const FRONT_COVER: u8 = 3;
+
+/// A cover image, ready to embed: JPEG or PNG bytes and what FLAC's PICTURE block states.
+pub struct Cover {
+    pub data: Vec<u8>,
+    pub mime: &'static str,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Cover {
+    fn extension(&self) -> &'static str {
+        if self.mime == "image/png" { "png" } else { "jpg" }
+    }
+}
+
+/// The cover from `path`: an image file (JPEG or PNG), or an audio file, whose embedded cover
+/// is taken (else one saved beside it, such as `cover.jpg`). Larger than `COVER_MAX`, it's
+/// scaled down and re-encoded as JPEG; otherwise its bytes are kept as they are.
+pub fn load_cover(path: &Path) -> Result<Cover> {
+    let audio = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["mp3", "flac", "wav", "aif", "aiff", "m4a", "aac"].contains(&e.to_ascii_lowercase().as_str()));
+    let data = if audio {
+        decode::read_tags(path)?
+            .cover
+            .map(Vec::from)
+            .or_else(|| crate::library::folder_cover(path))
+            .ok_or_else(|| anyhow!("{} has no cover", path.display()))?
+    } else {
+        std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?
+    };
+    let mime = match image::guess_format(&data) {
+        Ok(image::ImageFormat::Jpeg) => "image/jpeg",
+        Ok(image::ImageFormat::Png) => "image/png",
+        _ => bail!("the cover must be a JPEG or PNG image"),
+    };
+    let img = image::load_from_memory(&data).context("cannot read the cover image")?;
+    if img.width().max(img.height()) <= COVER_MAX {
+        return Ok(Cover { width: img.width(), height: img.height(), data, mime });
+    }
+    let img = img.resize(COVER_MAX, COVER_MAX, image::imageops::FilterType::Lanczos3).to_rgb8();
+    let mut data = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut data, 92).encode_image(&img)?;
+    Ok(Cover { width: img.width(), height: img.height(), data, mime: "image/jpeg" })
+}
+
+/// A small JPEG of the cover at `path`, as a data URL, with the size it will be embedded at.
+pub fn cover_preview(path: &Path) -> Result<(String, u32, u32)> {
+    use base64::Engine;
+    let cover = load_cover(path)?;
+    let thumb = image::load_from_memory(&cover.data)?.thumbnail(240, 240).to_rgb8();
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85).encode_image(&thumb)?;
+    let url = format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(jpeg));
+    Ok((url, cover.width, cover.height))
+}
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -57,6 +119,7 @@ struct Tags<'a> {
     album: &'a str,
     track: usize,
     total: usize,
+    cover: Option<&'a Cover>,
 }
 
 /// Write `items` (in track order) to the zip at `path`, calling `progress` with the number
@@ -68,6 +131,7 @@ pub fn write_zip(
     format: Format,
     artist: &str,
     album: &str,
+    cover: Option<&Cover>,
     progress: impl Fn(usize) + Sync,
 ) -> Result<()> {
     if items.is_empty() {
@@ -81,6 +145,9 @@ pub fn write_zip(
     let next = AtomicUsize::new(0);
     let done = AtomicUsize::new(0);
     let failure: Mutex<Option<anyhow::Error>> = Mutex::new(None);
+    if let Some(cover) = cover {
+        add_file(&mut zip.lock().unwrap(), &format!("cover.{}", cover.extension()), &cover.data)?;
+    }
 
     std::thread::scope(|scope| {
         for _ in 0..WORKERS.min(items.len()) {
@@ -91,7 +158,7 @@ pub fn write_zip(
                         break;
                     }
                     let item = &items[i];
-                    let tags = Tags { title: &item.title, artist, album, track: i + 1, total: items.len() };
+                    let tags = Tags { title: &item.title, artist, album, track: i + 1, total: items.len(), cover };
                     let written = encode(Path::new(&item.source), format, &tags)
                         .and_then(|bytes| add_file(&mut zip.lock().unwrap(), &names[i], &bytes))
                         .with_context(|| format!("{}", Path::new(&item.source).display()));
@@ -214,9 +281,29 @@ fn flac(audio: &AudioData, tags: &Tags) -> Result<Vec<u8>> {
         .map_err(|e| anyhow!("FLAC encoder: {e:?}"))?;
     let comment = vorbis_comment(tags);
     stream.add_metadata_block(MetadataBlockData::new_unknown(4, &comment).map_err(|e| anyhow!("FLAC tags: {e:?}"))?);
+    if let Some(cover) = tags.cover {
+        stream.add_metadata_block(MetadataBlockData::new_unknown(6, &flac_picture(cover)).map_err(|e| anyhow!("FLAC cover: {e:?}"))?);
+    }
     let mut sink = flacenc::bitsink::ByteSink::new();
     stream.write(&mut sink).map_err(|e| anyhow!("FLAC encoder: {e:?}"))?;
     Ok(sink.into_inner())
+}
+
+/// A FLAC PICTURE block's body: the front cover (big-endian lengths, no description).
+fn flac_picture(cover: &Cover) -> Vec<u8> {
+    let mut out = Vec::with_capacity(cover.data.len() + 64);
+    let u32be = |n: u32, out: &mut Vec<u8>| out.extend_from_slice(&n.to_be_bytes());
+    u32be(FRONT_COVER as u32, &mut out);
+    u32be(cover.mime.len() as u32, &mut out);
+    out.extend_from_slice(cover.mime.as_bytes());
+    u32be(0, &mut out); // description
+    u32be(cover.width, &mut out);
+    u32be(cover.height, &mut out);
+    u32be(24, &mut out); // colour depth
+    u32be(0, &mut out); // not indexed
+    u32be(cover.data.len() as u32, &mut out);
+    out.extend_from_slice(&cover.data);
+    out
 }
 
 /// A FLAC VORBIS_COMMENT block's body.
@@ -283,7 +370,7 @@ fn mp3(audio: &AudioData, tags: &Tags) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// An ID3v2.4 tag (UTF-8 text frames) with the non-empty tags.
+/// An ID3v2.4 tag (UTF-8 text frames) with the non-empty tags, and the cover (APIC) if any.
 fn id3v2(tags: &Tags) -> Vec<u8> {
     let track = format!("{}/{}", tags.track, tags.total);
     let mut frames = Vec::new();
@@ -295,6 +382,17 @@ fn id3v2(tags: &Tags) -> Vec<u8> {
         frames.extend_from_slice(&syncsafe(value.len() as u32 + 1));
         frames.extend_from_slice(&[0, 0, 3]); // no flags; UTF-8
         frames.extend_from_slice(value.as_bytes());
+    }
+    if let Some(cover) = tags.cover {
+        // Encoding (ISO-8859-1), MIME type, picture type, empty description, the image.
+        let mut body = vec![0];
+        body.extend_from_slice(cover.mime.as_bytes());
+        body.extend_from_slice(&[0, FRONT_COVER, 0]);
+        body.extend_from_slice(&cover.data);
+        frames.extend_from_slice(b"APIC");
+        frames.extend_from_slice(&syncsafe(body.len() as u32));
+        frames.extend_from_slice(&[0, 0]);
+        frames.extend_from_slice(&body);
     }
     let mut tag = b"ID3\x04\x00\x00".to_vec();
     tag.extend_from_slice(&syncsafe(frames.len() as u32));

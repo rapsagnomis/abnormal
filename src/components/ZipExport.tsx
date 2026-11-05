@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { ZipFormat, ZipItem } from "../lib/api";
+import { api } from "../lib/api";
+import type { CoverPreview, ZipFormat, ZipItem } from "../lib/api";
 import { Glide } from "./Glide";
 
 /** A lane that can go into the zip: its song's version in front. */
@@ -15,6 +18,8 @@ export interface ZipTrack {
   path: string;
   /** The front version's artist tag, if any. */
   artist: string | null;
+  /** Its cover's thumbnail (in the app's covers folder), if it has one. */
+  cover: string | null;
   /** "2 of 3" when the song has several versions. */
   version: string | null;
 }
@@ -72,7 +77,7 @@ interface Props {
   tracks: ZipTrack[];
   /** Ask where to save and write the zip (calling `started` once it's chosen); resolves to its
    *  path, or null if cancelled. */
-  onExport: (items: ZipItem[], format: ZipFormat, artist: string, started: () => void) => Promise<string | null>;
+  onExport: (items: ZipItem[], format: ZipFormat, artist: string, cover: string | null, started: () => void) => Promise<string | null>;
 }
 
 /** Export as Zip (from the app menu): every lane's version in front, named and tagged, encoded
@@ -83,6 +88,9 @@ export function ZipExport({ open, onClose, tracks, onExport }: Props) {
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ text: string; error?: boolean; saved?: string } | null>(null);
+  /** The cover: an image file, or a track whose own cover is used (its file); kept while the app runs. */
+  const [cover, setCover] = useState<{ path: string; preview: CoverPreview } | null>(null);
+  const [coverError, setCoverError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   const { artist, pattern, format } = settings;
@@ -137,7 +145,7 @@ export function ZipExport({ open, onClose, tracks, onExport }: Props) {
     const total = items.length;
     const unlisten = await listen<number>("zip-progress", (e) => setStatus({ text: `Encoding… ${e.payload} of ${total} done` }));
     try {
-      const saved = await onExport(items, format, artist.trim(), () => setStatus({ text: `Encoding… 0 of ${total} done` }));
+      const saved = await onExport(items, format, artist.trim(), cover?.path ?? null, () => setStatus({ text: `Encoding… 0 of ${total} done` }));
       setStatus(saved ? { text: `${total} track${total === 1 ? "" : "s"}, ${format.toUpperCase()}`, saved } : null);
     } catch (err) {
       setStatus({ text: String(err), error: true });
@@ -146,6 +154,21 @@ export function ZipExport({ open, onClose, tracks, onExport }: Props) {
       setBusy(false);
     }
   };
+
+  const pickCover = async (path: string) => {
+    setCoverError(null);
+    try {
+      setCover({ path, preview: await api.coverPreview(path) });
+    } catch (err) {
+      setCoverError(String(err));
+    }
+  };
+  const chooseCover = async () => {
+    const picked = await openDialog({ filters: [{ name: "Image", extensions: ["jpg", "jpeg", "png"] }] });
+    if (typeof picked === "string") await pickCover(picked);
+  };
+  // The tracks' own covers, one per image (an album's tracks share one).
+  const trackCovers = tracks.filter((t, i) => t.cover && tracks.findIndex((u) => u.cover === t.cover) === i);
 
   const toggleTrack = (path: string) =>
     setSkipped((s) => {
@@ -185,6 +208,52 @@ export function ZipExport({ open, onClose, tracks, onExport }: Props) {
             <span>Artist</span>
             <input type="text" value={artist} placeholder="Artist name" disabled={busy} onKeyDown={fieldKeys} onChange={(e) => update({ artist: e.target.value })} />
           </label>
+
+          <div className="zip-field zip-cover-field">
+            <span>Cover</span>
+            <div className="zip-cover">
+              {cover ? (
+                <img className="zip-cover-art" src={cover.preview.url} alt="The cover" />
+              ) : (
+                <span className="zip-cover-art" aria-hidden="true">
+                  ♪
+                </span>
+              )}
+              <div className="zip-cover-side">
+                <div className="zip-cover-actions">
+                  <button disabled={busy} onClick={chooseCover} title="A JPEG or PNG image">
+                    Choose image…
+                  </button>
+                  {cover && (
+                    <button disabled={busy} onClick={() => setCover(null)} title="Export without a cover">
+                      None
+                    </button>
+                  )}
+                </div>
+                {trackCovers.length > 0 && (
+                  <div className="zip-cover-tracks">
+                    {trackCovers.map((t) => (
+                      <button
+                        key={t.path}
+                        className={`zip-cover-pick${cover?.path === t.path ? " on" : ""}`}
+                        disabled={busy}
+                        onClick={() => pickCover(t.path)}
+                        title={`Track ${t.label}'s cover: ${t.title}`}
+                      >
+                        <img src={convertFileSrc(t.cover!)} alt="" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <span className={`chart-note${coverError ? " error" : ""}`}>
+                  {coverError ??
+                    (cover
+                      ? `${cover.preview.width} × ${cover.preview.height} · ${format === "wav" ? "WAV can't carry a cover: added to the zip beside the files" : "embedded in every file, and added to the zip"}`
+                      : "None: pick an image, or a track's cover")}
+                </span>
+              </div>
+            </div>
+          </div>
 
           <label className="zip-field">
             <span>Track names</span>

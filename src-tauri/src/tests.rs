@@ -1307,7 +1307,7 @@ mod bundle {
     use std::f64::consts::PI;
     use std::io::Read;
 
-    use crate::bundle::{BundleItem, Format, archive_names, write_zip};
+    use crate::bundle::{BundleItem, Format, archive_names, load_cover, write_zip};
     use crate::decode::{AudioData, decode_file, read_tags};
     use crate::wav::write_wav_to;
 
@@ -1319,7 +1319,7 @@ mod bundle {
     }
 
     /// Two sine tracks zipped in each format: both come back, decodable, at about the same
-    /// level and length, tagged.
+    /// level and length, tagged; the cover is in the archive and embedded in FLAC and MP3.
     #[test]
     fn zip_round_trip() {
         let dir = std::env::temp_dir().join(format!("abnormal-zip-test-{}", std::process::id()));
@@ -1340,6 +1340,10 @@ mod bundle {
             .enumerate()
             .map(|(i, p)| BundleItem { source: p.display().to_string(), name: format!("0{} - Ünïcode {}", i + 1, i + 1), title: format!("Ünïcode {}", i + 1) })
             .collect();
+        let cover_path = dir.join("art.png");
+        image::RgbImage::from_fn(32, 24, |x, y| image::Rgb([x as u8 * 8, y as u8 * 10, 128])).save(&cover_path).unwrap();
+        let cover = load_cover(&cover_path).unwrap();
+        assert_eq!((cover.mime, cover.width, cover.height), ("image/png", 32, 24));
 
         for format in [Format::Wav, Format::Flac, Format::Mp3] {
             let ext = match format {
@@ -1348,9 +1352,12 @@ mod bundle {
                 Format::Mp3 => "mp3",
             };
             let zip_path = dir.join(format!("bundle-{ext}.zip"));
-            write_zip(&zip_path, &items, format, "Artist", "Album", |_| {}).unwrap();
+            write_zip(&zip_path, &items, format, "Artist", "Album", Some(&cover), |_| {}).unwrap();
             let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip_path).unwrap()).unwrap();
-            assert_eq!(archive.len(), 2);
+            assert_eq!(archive.len(), 3);
+            let mut art = Vec::new();
+            archive.by_name("cover.png").unwrap().read_to_end(&mut art).unwrap();
+            assert_eq!(art, cover.data);
             for (i, item) in items.iter().enumerate() {
                 let name = format!("{}.{ext}", item.name);
                 let mut bytes = Vec::new();
@@ -1375,6 +1382,9 @@ mod bundle {
                     assert_eq!(tags.title.as_deref(), Some(title.as_str()), "{name}");
                     assert_eq!(tags.artist.as_deref(), Some("Artist"), "{name}");
                     assert_eq!(tags.album.as_deref(), Some("Album"), "{name}");
+                    assert_eq!(tags.cover.as_deref(), Some(cover.data.as_slice()), "{name}: cover");
+                    // An audio file's own cover can be picked as the cover too.
+                    assert_eq!(load_cover(&out).unwrap().data, cover.data, "{name}");
                 }
             }
         }

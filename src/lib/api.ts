@@ -378,6 +378,13 @@ export interface MatchReport extends EqReport {
 /** Export as Zip's encodings: 24-bit WAV, 24-bit FLAC, 320 kb/s MP3. */
 export type ZipFormat = "wav" | "flac" | "mp3";
 
+/** A cover as Export as Zip shows it: a small JPEG data URL and the size it's embedded at. */
+export interface CoverPreview {
+  url: string;
+  width: number;
+  height: number;
+}
+
 /** One file of an Export as Zip, in track order. */
 export interface ZipItem {
   /** The audio file. */
@@ -475,8 +482,11 @@ export const api = {
   setFullMatch: (slot: Slot, enabled: boolean) => invoke<void>("set_full_match", { slot, enabled }),
   /** Write the files into one zip at `path`, tagged with `artist` and `album` (and their title
    *  and track number); a `zip-progress` event carries the number of files done. */
-  exportZip: (path: string, items: ZipItem[], format: ZipFormat, artist: string, album: string) =>
-    invoke<void>("export_zip", { path, items, format, artist, album }),
+  /** `cover`: an image, or an audio file whose own cover is used; embedded in FLAC and MP3. */
+  exportZip: (path: string, items: ZipItem[], format: ZipFormat, artist: string, album: string, cover: string | null) =>
+    invoke<void>("export_zip", { path, items, format, artist, album, cover }),
+  /** What a cover (an image, or an audio file's own cover) looks like, for Export as Zip. */
+  coverPreview: (path: string) => invoke<CoverPreview>("cover_preview", { path }),
   /** The user's Pro-Q 4 "Default Setting" preset text, if any. */
   proQTemplate: () => invoke<string | null>("pro_q_template"),
   libraryStatus: () => invoke<LibraryStatus>("library_status"),

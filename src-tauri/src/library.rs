@@ -497,7 +497,7 @@ fn for_each_parallel<T: Sync>(items: &[T], f: impl Fn(&T) + Sync) {
 }
 
 /// A cover image saved next to the audio file (Deemix writes `cover.jpg` per album).
-fn folder_cover(path: &Path) -> Option<Vec<u8>> {
+pub(crate) fn folder_cover(path: &Path) -> Option<Vec<u8>> {
     let dir = path.parent()?;
     FOLDER_COVERS.iter().find_map(|name| std::fs::read(dir.join(name)).ok())
 }

@@ -3238,6 +3238,68 @@ button.busy::after {
 .zip-field .segmented {
   justify-self: start;
 }
+/* The cover: its art, then where it comes from (a file, or a track's own cover). */
+.export-menu .zip-cover-field {
+  align-items: start;
+}
+.zip-cover-field > span {
+  padding-top: 4px;
+}
+.zip-cover {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+.zip-cover-art {
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--panel-raised);
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  font-size: 24px;
+}
+.zip-cover-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.zip-cover-actions {
+  display: flex;
+  gap: 6px;
+}
+.zip-cover-actions button {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+.zip-cover-tracks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.zip-cover-pick {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 4px;
+}
+.zip-cover-pick img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.zip-cover-pick.on {
+  box-shadow: 0 0 0 1.5px var(--text);
+}
+.zip-cover-side .chart-note.error {
+  color: var(--danger);
+}
 .session-menu kbd {
   flex: none;
   font: inherit;

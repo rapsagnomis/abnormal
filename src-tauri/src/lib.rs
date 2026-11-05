@@ -26,7 +26,7 @@ mod wav;
 mod tests;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -442,13 +442,35 @@ async fn export_zip(
     format: bundle::Format,
     artist: String,
     album: String,
+    cover: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        bundle::write_zip(&PathBuf::from(path), &items, format, artist.trim(), album.trim(), |done| {
+        let cover = cover.map(|c| bundle::load_cover(Path::new(&c))).transpose().map_err(|e| format!("{e:#}"))?;
+        bundle::write_zip(&PathBuf::from(path), &items, format, artist.trim(), album.trim(), cover.as_ref(), |done| {
             let _ = app.emit("zip-progress", done);
         })
         .map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// What Export as Zip's cover field shows for `path` (an image, or an audio file's own cover).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoverPreview {
+    /// A small JPEG, as a data URL.
+    url: String,
+    /// The size it's embedded at, px.
+    width: u32,
+    height: u32,
+}
+
+#[tauri::command]
+async fn cover_preview(path: String) -> Result<CoverPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        bundle::cover_preview(Path::new(&path)).map(|(url, width, height)| CoverPreview { url, width, height }).map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -802,6 +824,7 @@ pub fn run() {
             render_full_match,
             set_full_match,
             export_zip,
+            cover_preview,
             spectrogram,
             live_spectrum,
             band_activity,

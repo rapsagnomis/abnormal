@@ -1402,14 +1402,14 @@ export default function App() {
 
   /** Export as Zip: ask where (beside the session, named after it), then write the zip. Its name
    *  is the album tag. */
-  const exportZip = async (items: ZipItem[], format: ZipFormat, artist: string, started: () => void): Promise<string | null> => {
+  const exportZip = async (items: ZipItem[], format: ZipFormat, artist: string, cover: string | null, started: () => void): Promise<string | null> => {
     const folder = folderOf(session?.path ?? items[0].source);
     const name = session?.name ?? folder.split("/").pop() ?? "Tracks";
     let path = await save({ defaultPath: `${folder}/${name}.zip`, filters: [{ name: "Zip archive", extensions: ["zip"] }] });
     if (!path) return null;
     if (!/\.zip$/i.test(path)) path += ".zip";
     started();
-    await api.exportZip(path, items, format, artist, path.split("/").pop()!.replace(/\.zip$/i, ""));
+    await api.exportZip(path, items, format, artist, path.split("/").pop()!.replace(/\.zip$/i, ""), cover);
     return path;
   };
   /** What Export as Zip offers: each loaded lane's version in front, in lane order. */
@@ -1418,7 +1418,7 @@ export default function App() {
     const song = versions[s];
     if (!track) return [];
     const version = song && song.versions.length > 1 ? `${song.front + 1} of ${song.versions.length}` : null;
-    return [{ label: labelOf(s), title: songName(s), path: track.path, artist: track.artist, version }];
+    return [{ label: labelOf(s), title: songName(s), path: track.path, artist: track.artist, cover: track.cover, version }];
   });
 
   /** Seek one track, or every loaded track to the same time when playheads are linked. */

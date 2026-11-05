@@ -28,6 +28,8 @@ const TABS: [Tab, string][] = [
 ];
 
 interface Props {
+  /** Hide the panel (it closes like a drawer). */
+  onClose: () => void;
   tab: Tab;
   /** The two tracks compared; `reports` and every other pair below are in this order. */
   pair: ComparedPair;
@@ -88,12 +90,19 @@ export function AnalysisPanel(p: Props) {
   return (
     <PairContext.Provider value={p.pair}>
     <aside className="panel" ref={panel} style={pairColors(p.pair.labels)}>
-      <div className="tabs" role="tablist">
-        {TABS.map(([t, name]) => (
-          <button key={t} role="tab" aria-selected={p.tab === t} className={p.tab === t ? "on" : ""} onClick={() => p.onTab(t)}>
-            {name}
-          </button>
-        ))}
+      <div className="panel-top">
+        <div className="tabs" role="tablist">
+          {TABS.map(([t, name]) => (
+            <button key={t} role="tab" aria-selected={p.tab === t} className={p.tab === t ? "on" : ""} onClick={() => p.onTab(t)}>
+              {name}
+            </button>
+          ))}
+        </div>
+        <button className="panel-close" onClick={p.onClose} title="Hide the analysis panel (A)" aria-label="Hide the analysis panel">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="m9 6 6 6-6 6" />
+          </svg>
+        </button>
       </div>
       <header className="panel-header">
         <span className="scope-label">Measure</span>
@@ -324,7 +333,7 @@ function EqView(p: EqViewProps) {
     labels: [a, b],
   } = usePair();
   if (!p.hasBoth) {
-    return <p className="chart-note">Load a mix and a reference to get EQ suggestions.</p>;
+    return <p className="chart-note">Load a track and a reference to get EQ suggestions.</p>;
   }
   const loudestToggle = (
     <label className="eq-option" title="Measure both tracks only over their louder-than-average stretches (as Matchering does), so quiet intros and breakdowns don't sway the match">

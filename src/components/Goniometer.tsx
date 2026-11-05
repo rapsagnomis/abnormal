@@ -17,6 +17,7 @@ const PX = 150;
  */
 export function Goniometer({ label, color, density, size }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const swatch = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const canvas = ref.current!;
@@ -42,9 +43,9 @@ export function Goniometer({ label, color, density, size }: Props) {
     ctx.stroke();
 
     if (!density) return;
-    // Canvas can't resolve CSS custom properties, so look the colour up first.
-    const varName = color.match(/^var\((--[^)]+)\)$/)?.[1];
-    const [r, g, b] = parseHex(varName ? getComputedStyle(canvas).getPropertyValue(varName).trim() : color);
+    // Canvas can't resolve CSS custom properties, so read the colour off the legend swatch, as
+    // the browser resolved it (a cover colour is a color-mix(), not a hex value).
+    const [r, g, b] = toRgb(swatch.current ? getComputedStyle(swatch.current).backgroundColor : color);
 
     // Paint the density at its native resolution, then scale it up smoothly.
     const img = new ImageData(size, size);
@@ -73,15 +74,18 @@ export function Goniometer({ label, color, density, size }: Props) {
         <span className="gonio-axis r">R</span>
       </div>
       <figcaption>
-        <i style={{ background: color }} />
+        <i ref={swatch} style={{ background: color }} />
         {label}
       </figcaption>
     </figure>
   );
 }
 
-/** "#rrggbb" → [r, g, b]. */
-function parseHex(hex: string): [number, number, number] {
-  const n = parseInt(hex.replace("#", ""), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+/** Any CSS colour the canvas understands (rgb(), color(srgb …), hex…) → [r, g, b], by painting one pixel. */
+function toRgb(css: string): [number, number, number] {
+  const ctx = new OffscreenCanvas(1, 1).getContext("2d")!;
+  ctx.fillStyle = css;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  return [r, g, b];
 }

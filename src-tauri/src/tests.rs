@@ -236,42 +236,6 @@ fn bench_real_file() {
     );
 }
 
-/// Spotify Loud preview limiter (`player::Limiter`).
-mod limiter {
-    use crate::player::{LIMIT_CEILING_DB, Limiter};
-
-    const RATE: f32 = 48000.0;
-
-    fn run(amp: f32) -> f32 {
-        let mut lim = Limiter::new(RATE);
-        let mut peak = 0.0f32;
-        for i in 0..RATE as usize {
-            let x = amp * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / RATE).sin();
-            let (l, r) = lim.process(x, x);
-            assert_eq!(l, r);
-            // After it has settled (half a second).
-            if i > RATE as usize / 2 {
-                peak = peak.max(l.abs());
-            }
-        }
-        20.0 * peak.log10()
-    }
-
-    #[test]
-    fn holds_a_hot_signal_at_the_ceiling() {
-        // +6 dBFS sine: brought down to just above −1 dBFS. With a 5 ms attack and no look-ahead,
-        // each sine peak gets through a little (about 0.8 dB here).
-        let peak = run(2.0);
-        assert!(peak > LIMIT_CEILING_DB - 0.05 && peak < 0.0, "{peak:.2} dB");
-    }
-
-    #[test]
-    fn leaves_signal_below_the_ceiling_alone() {
-        let peak = run(0.5);
-        assert!((peak - 20.0 * 0.5f32.log10()).abs() < 1e-3, "{peak:.3} dB");
-    }
-}
-
 /// Player mode in the mixer (`player::Mixer`), without an audio device.
 mod player_mode {
     use std::sync::Arc;
@@ -984,34 +948,6 @@ mod eq {
             assert!((got - want).abs() < 0.3, "{hz} Hz: {got:.2} vs {want:.2}");
         }
     }
-
-    #[test]
-    fn export_keeps_or_matches_loudness() {
-        use crate::export::{ExportEq, export};
-        use crate::loudness;
-
-        let rate = 44100;
-        let stereo = |seed, amp| AudioData { sample_rate: rate, channels: vec![noise(seed, 5 * rate as usize, amp), noise(seed + 1, 5 * rate as usize, amp)] };
-        let (track, reference) = (stereo(1, 0.3), stereo(3, 0.1));
-        let lufs = |a: &AudioData| loudness::analyze(a, 0, a.frames(), false).unwrap().stats.integrated.unwrap();
-        let whole = (0, track.frames());
-        let path = std::env::temp_dir().join(format!("abnormal-export-test-{}.wav", std::process::id()));
-        let boost = ExportEq::Moves { filters: vec![Filter::stereo(FilterKind::Peak, 1000.0, 6.0, 1.0)] };
-        let cut = ExportEq::Full { mid: vec![-6.0; grid().len()], side: vec![-6.0; grid().len()] };
-
-        // EQ only: level-compensated back to the track's own loudness, in 24-bit.
-        let out = export(&path, &track, whole, Some(&boost), None, false).unwrap();
-        let written = crate::decode::decode_file(&path).unwrap();
-        assert_eq!((written.sample_rate, written.channels.len(), written.frames()), (rate, 2, track.frames()));
-        assert!(out.gain_db < -0.2, "a boost is compensated: {:.2}", out.gain_db);
-        assert!((lufs(&written) - lufs(&track)).abs() < 0.1, "{:.2} vs {:.2}", lufs(&written), lufs(&track));
-
-        // Full match plus loudness match: lands on the reference, as 32-bit float.
-        export(&path, &track, whole, Some(&cut), Some((&reference, (0, reference.frames()))), true).unwrap();
-        let written = crate::decode::decode_file(&path).unwrap();
-        assert!((lufs(&written) - lufs(&reference)).abs() < 0.1, "{:.2} vs {:.2}", lufs(&written), lufs(&reference));
-        let _ = std::fs::remove_file(&path);
-    }
 }
 
 /// EQ suggestions for a real pair: `SONIC_EQ_TRACK=a.flac SONIC_EQ_REFERENCE=b.flac cargo test eq_real_pair -- --nocapture`.
@@ -1130,16 +1066,17 @@ fn deemix_search() {
 }
 
 /// Markers follow the audio: a move keeps them, copies share them, a re-bounce over the same path
-/// carries them over, the first (path-keyed) format migrates, and an empty list removes them.
+/// carries them over, the first (path-keyed) format migrates, markers without a note aren't saved,
+/// and an empty list removes them.
 #[test]
 fn markers_follow_the_audio() {
     use crate::markers::{Marker, Markers};
     let db = std::env::temp_dir().join(format!("abnormal-markers-{}.json", std::process::id()));
     let m = |time: f64, note: &str| Marker { time, note: note.into() };
-    let notes = vec![m(3.5, ""), m(42.0, "harsh vocal")];
+    let notes = vec![m(3.5, "intro"), m(42.0, "harsh vocal")];
 
     let store = Markers::new(db.clone());
-    store.set("mix-v1", "/old/mix.wav", vec![m(42.0, "harsh vocal"), m(3.5, "")]).unwrap();
+    store.set("mix-v1", "/old/mix.wav", vec![m(42.0, "harsh vocal"), m(10.0, "  "), m(3.5, "intro"), m(20.0, "")]).unwrap();
     // Reloaded from disk, sorted; moved to another folder: same audio, same notes.
     let store = Markers::new(db.clone());
     assert_eq!(store.get("mix-v1", "/new/mix.wav"), notes);
@@ -1164,7 +1101,8 @@ fn markers_follow_the_audio() {
     let _ = std::fs::remove_file(db);
 }
 
-/// Sessions keep their lanes in order with their versions, names and front version, find the
+/// Sessions keep their lanes in order with their versions, names, front version and loudness
+/// matching, find the
 /// files again when their folder moves, still open the first (flat) format, and the recent list
 /// puts the last used first without duplicates.
 #[test]
@@ -1174,31 +1112,57 @@ fn sessions_round_trip() {
     let album = root.join("album");
     std::fs::create_dir_all(&album).unwrap();
     let at = |dir: &std::path::Path, n: &str| dir.join(n).to_string_lossy().into_owned();
-    for n in ["2 b v1.wav", "2 b v2.wav", "1 a.wav"] {
+    for n in ["2 b v1.wav", "2 b v2.wav", "1 a.wav", "3 c.wav", "ref x.flac", "ref y.flac", "default ref.flac"] {
         std::fs::write(album.join(n), b"").unwrap();
     }
     let lanes = vec![
-        Lane { name: "Song B".into(), versions: vec![at(&album, "2 b v1.wav"), at(&album, "2 b v2.wav")], front: 1 },
-        Lane { name: String::new(), versions: vec![at(&album, "1 a.wav")], front: 0 },
-        Lane { name: "empty".into(), versions: vec![], front: 0 },
+        Lane {
+            name: "Song B".into(),
+            versions: vec![at(&album, "2 b v1.wav"), at(&album, "2 b v2.wav")],
+            front: 1,
+            match_loudness: true,
+            references: vec![at(&album, "ref x.flac"), at(&album, "ref y.flac")],
+            reference_front: 1,
+            compare_default: true,
+            ..Lane::default()
+        },
+        // Compared with lane 3, which becomes lane 2 once the empty lane is left out.
+        Lane { versions: vec![at(&album, "1 a.wav")], compare_lane: Some(3), ..Lane::default() },
+        Lane { name: "empty".into(), ..Lane::default() },
+        // Compared with the empty lane: the link goes with it.
+        Lane { versions: vec![at(&album, "3 c.wav")], compare_lane: Some(2), ..Lane::default() },
     ];
     let file = album.join("Album.abnormal");
-    let saved = sessions::write(&file, &lanes).unwrap();
+    let default_ref = at(&album, "default ref.flac");
+    let saved = sessions::write(&file, &lanes, Some(&default_ref)).unwrap();
     assert_eq!(saved.name, "Album");
-    assert_eq!(sessions::read(&file).unwrap().lanes, lanes[..2]);
+    let read = sessions::read(&file).unwrap();
+    assert_eq!(
+        read.lanes,
+        [
+            lanes[0].clone(),
+            Lane { compare_lane: Some(2), ..lanes[1].clone() },
+            Lane { compare_lane: None, ..lanes[3].clone() },
+        ]
+    );
+    assert_eq!(read.default_reference.as_deref(), Some(default_ref.as_str()));
 
     // The album folder moved: files are found next to the session.
     let moved = root.join("moved");
     std::fs::rename(&album, &moved).unwrap();
     let opened = sessions::read(&moved.join("Album.abnormal")).unwrap();
     assert_eq!(opened.lanes[0].versions, [at(&moved, "2 b v1.wav"), at(&moved, "2 b v2.wav")]);
-    assert_eq!((opened.lanes[0].name.as_str(), opened.lanes[0].front), ("Song B", 1));
+    assert_eq!((opened.lanes[0].name.as_str(), opened.lanes[0].front, opened.lanes[0].match_loudness), ("Song B", 1, true));
+    // The song's references moved with it.
+    assert_eq!(opened.lanes[0].references, [at(&moved, "ref x.flac"), at(&moved, "ref y.flac")]);
+    assert_eq!(opened.lanes[0].reference_front, 1);
+    assert_eq!(opened.default_reference, Some(at(&moved, "default ref.flac")));
 
     // The first format: a flat list of tracks, one version per lane.
     let v1 = moved.join("Old.abnormal");
     let a = at(&moved, "1 a.wav");
     std::fs::write(&v1, format!(r#"{{"version":1,"tracks":[{{"path":{a:?}}}]}}"#)).unwrap();
-    assert_eq!(sessions::read(&v1).unwrap().lanes, [Lane { name: String::new(), versions: vec![a], front: 0 }]);
+    assert_eq!(sessions::read(&v1).unwrap().lanes, [Lane { versions: vec![a], ..Lane::default() }]);
 
     let recents = Recents::new(root.join("recent.json"));
     recents.touch(&opened);
@@ -1206,12 +1170,63 @@ fn sessions_round_trip() {
     recents.touch(&opened);
     let list = Recents::new(root.join("recent.json")).list();
     assert_eq!(list.len(), 1);
-    assert_eq!((list[0].name.as_str(), list[0].tracks), ("Album", 2));
+    assert_eq!((list[0].name.as_str(), list[0].tracks), ("Album", 3));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Files renamed or moved outside the app are found again: by bookmark (macOS) wherever they went
+/// on the volume, else by identity (size and edge hash) in the folders around where they were;
+/// a different file of the same size isn't taken for them, and a file found nowhere keeps its path.
+#[test]
+fn sessions_find_renamed_files() {
+    use crate::relink;
+    use crate::sessions::{self, Lane};
+    // Canonical, as bookmarks resolve to it (the temp folder is under a symlink on macOS).
+    let root = std::env::temp_dir().canonicalize().unwrap().join(format!("abnormal-relink-{}", std::process::id()));
+    let album = root.join("album");
+    std::fs::create_dir_all(&album).unwrap();
+    let at = |dir: &std::path::Path, n: &str| dir.join(n).to_string_lossy().into_owned();
+    // Same size, different contents (past the hashed edges too).
+    let audio = |c: u8| (0..300_000u32).map(|i| (i % 251) as u8 ^ c).collect::<Vec<u8>>();
+    for (i, n) in ["mix v1.wav", "mix v2.wav", "gone.wav"].iter().enumerate() {
+        std::fs::write(album.join(n), audio(i as u8 + 1)).unwrap();
+    }
+    assert_ne!(relink::identity(&album.join("mix v1.wav")), relink::identity(&album.join("mix v2.wav")));
+    let lane = |versions: Vec<String>| Lane { versions, ..Lane::default() };
+    let file = album.join("Album.abnormal");
+    sessions::write(&file, &[lane(vec![at(&album, "mix v1.wav"), at(&album, "mix v2.wav")]), lane(vec![at(&album, "gone.wav")])], None).unwrap();
+
+    // v1 renamed in place, v2 moved three folders away (out of reach of the search), gone deleted.
+    std::fs::rename(album.join("mix v1.wav"), album.join("mix v1 final.wav")).unwrap();
+    let far = root.join("elsewhere/a/b");
+    std::fs::create_dir_all(&far).unwrap();
+    std::fs::rename(album.join("mix v2.wav"), far.join("v2.wav")).unwrap();
+    std::fs::remove_file(album.join("gone.wav")).unwrap();
+    let opened = sessions::read(&file).unwrap();
+    assert_eq!(opened.lanes[0].versions[0], at(&album, "mix v1 final.wav"));
+    assert_eq!(opened.lanes[1].versions, [at(&album, "gone.wav")]);
+    if cfg!(target_os = "macos") {
+        assert_eq!(opened.lanes[0].versions[1], at(&far, "v2.wav"));
+        assert_eq!(opened.relinked.len(), 2);
+    }
+
+    // Without bookmarks (another platform, an older session): the identity search alone, which
+    // finds the rename next to it but not the file moved out of reach.
+    let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    for lane in json["lanes"].as_array_mut().unwrap() {
+        for t in lane["versions"].as_array_mut().unwrap() {
+            t.as_object_mut().unwrap().remove("bookmark");
+        }
+    }
+    std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+    let opened = sessions::read(&file).unwrap();
+    assert_eq!(opened.lanes[0].versions, [at(&album, "mix v1 final.wav"), at(&album, "mix v2.wav")]);
+    assert_eq!(opened.relinked, [sessions::Relinked { from: at(&album, "mix v1.wav"), to: at(&album, "mix v1 final.wav") }]);
     let _ = std::fs::remove_dir_all(root);
 }
 
 /// Prepared versions: wanted files are prepared in order, kept until no longer wanted, found by
-/// the slot playing them, and prepared again when the file changes (a re-bounce).
+/// the slot playing them, with their loudness, and prepared again when the file changes (a re-bounce).
 #[test]
 fn prepared_versions_follow_the_files() {
     use crate::decode::AudioData;
@@ -1229,18 +1244,21 @@ fn prepared_versions_follow_the_files() {
     let prepared = Prepared::<&str>::new();
     prepared.want(vec![v1.clone(), v2.clone()]);
     assert_eq!(prepared.next().map(|n| n.0), Some(v1.clone()));
-    prepared.keep(&v1, stamp(&v1), Some(&decoded("v1")), Some("{\"a\":1}".into()));
+    let report = r#"{"loudness":{"stats":{"integrated":-9.5}}}"#;
+    prepared.keep(&v1, stamp(&v1), Some(&decoded("v1")), Some(report.into()));
     assert_eq!(prepared.next().map(|n| n.0), Some(v2.clone()));
+    assert_eq!(prepared.loudness(&[v1.clone(), v2.clone()]), [Some(-9.5), None]);
     assert_eq!(prepared.decoded(&v1).map(|d| d.info), Some("v1"));
     assert_eq!(prepared.ready(), [v1.clone()]);
 
     // A slot playing v1 finds its analysis.
     prepared.set_slot(3, Some((v1.clone(), stamp(&v1))));
-    assert_eq!(prepared.slot_report(3).as_deref(), Some("{\"a\":1}"));
+    assert_eq!(prepared.slot_report(3).as_deref(), Some(report));
 
     // Re-bounced over the same file (different size): prepared again.
     std::fs::write(&v1, b"one, louder").unwrap();
     assert!(prepared.decoded(&v1).is_none());
+    assert_eq!(prepared.loudness(&[v1.clone()]), [None]);
     assert_eq!(prepared.next().map(|n| n.0), Some(v1.clone()));
 
     // No longer wanted: dropped, and not kept when offered.
@@ -1282,4 +1300,85 @@ fn library_standing_percentiles() {
     assert_eq!(get("loudness").percentiles[1], Some(45.0));
     // Constant over the library: still listed, every value tied.
     assert_eq!(get("punch").percentiles[0], Some(50.0));
+}
+
+mod bundle {
+    use std::f64::consts::PI;
+    use std::io::Read;
+
+    use crate::bundle::{BundleItem, Format, archive_names, write_zip};
+    use crate::decode::{AudioData, decode_file, read_tags};
+    use crate::wav::write_wav_to;
+
+    #[test]
+    fn names_are_safe_and_unique() {
+        let item = |name: &str| BundleItem { source: String::new(), name: name.into(), title: String::new() };
+        let names = archive_names(&[item("01 - A/B: mix"), item("Song"), item("song"), item("  ")], Format::Flac);
+        assert_eq!(names, ["01 - A_B_ mix.flac", "Song.flac", "song (2).flac", "Untitled.flac"]);
+    }
+
+    /// Two sine tracks zipped in each format: both come back, decodable, at about the same
+    /// level and length, tagged.
+    #[test]
+    fn zip_round_trip() {
+        let dir = std::env::temp_dir().join(format!("abnormal-zip-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rate = 44_100;
+        let tone = |hz: f64| -> Vec<f32> { (0..rate * 2).map(|i| (0.5 * (2.0 * PI * hz * i as f64 / rate as f64).sin()) as f32).collect() };
+        let mut sources = Vec::new();
+        for (n, hz) in [(1, 440.0), (2, 1000.0)] {
+            let audio = AudioData { sample_rate: rate as u32, channels: vec![tone(hz), tone(hz)] };
+            let path = dir.join(format!("source {n}.wav"));
+            let mut bytes = Vec::new();
+            write_wav_to(&mut bytes, &audio, false, &[]).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            sources.push(path);
+        }
+        let items: Vec<BundleItem> = sources
+            .iter()
+            .enumerate()
+            .map(|(i, p)| BundleItem { source: p.display().to_string(), name: format!("0{} - Ünïcode {}", i + 1, i + 1), title: format!("Ünïcode {}", i + 1) })
+            .collect();
+
+        for format in [Format::Wav, Format::Flac, Format::Mp3] {
+            let ext = match format {
+                Format::Wav => "wav",
+                Format::Flac => "flac",
+                Format::Mp3 => "mp3",
+            };
+            let zip_path = dir.join(format!("bundle-{ext}.zip"));
+            write_zip(&zip_path, &items, format, "Artist", "Album", |_| {}).unwrap();
+            let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip_path).unwrap()).unwrap();
+            assert_eq!(archive.len(), 2);
+            for (i, item) in items.iter().enumerate() {
+                let name = format!("{}.{ext}", item.name);
+                let mut bytes = Vec::new();
+                archive.by_name(&name).unwrap().read_to_end(&mut bytes).unwrap();
+                let out = dir.join(&name);
+                std::fs::write(&out, bytes).unwrap();
+                let audio = decode_file(&out).unwrap();
+                assert_eq!(audio.channels.len(), 2, "{name}");
+                // MP3 adds encoder delay and padding.
+                assert!((audio.duration() - 2.0).abs() < 0.1, "{name}: {} s", audio.duration());
+                let mid = &audio.channels[0][rate / 2..rate];
+                let peak = mid.iter().fold(0f32, |m, s| m.max(s.abs()));
+                assert!((peak - 0.5).abs() < 0.02, "{name}: peak {peak}");
+                let title = format!("Ünïcode {}", i + 1);
+                if format == Format::Wav {
+                    // Symphonia 0.6 reads a WAV's INFO chunk but drops it: look for the tags.
+                    let bytes = std::fs::read(&out).unwrap();
+                    let has = |id: &[u8], v: &str| bytes.windows(8 + v.len()).any(|w| &w[..4] == id && &w[8..] == v.as_bytes());
+                    assert!(has(b"INAM", &title) && has(b"IART", "Artist") && has(b"IPRD", "Album"), "{name}");
+                } else {
+                    let tags = read_tags(&out).unwrap();
+                    assert_eq!(tags.title.as_deref(), Some(title.as_str()), "{name}");
+                    assert_eq!(tags.artist.as_deref(), Some("Artist"), "{name}");
+                    assert_eq!(tags.album.as_deref(), Some("Album"), "{name}");
+                }
+            }
+        }
+        if std::env::var_os("SONIC_KEEP_ZIP").is_none() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
 }

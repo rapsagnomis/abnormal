@@ -22,6 +22,23 @@ const BUDGET_BYTES: usize = 4 << 30;
 /// A file as it is on disk: size and modification time.
 pub type Stamp = (u64, Option<SystemTime>);
 
+/// `loudness.stats.integrated` of an analysis report's JSON.
+fn integrated_of(report: &str) -> Option<f64> {
+    #[derive(serde::Deserialize)]
+    struct Report {
+        loudness: Loudness,
+    }
+    #[derive(serde::Deserialize)]
+    struct Loudness {
+        stats: Stats,
+    }
+    #[derive(serde::Deserialize)]
+    struct Stats {
+        integrated: Option<f64>,
+    }
+    serde_json::from_str::<Report>(report).ok()?.loudness.stats.integrated
+}
+
 pub fn stamp_of(path: &Path) -> Option<Stamp> {
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.len(), meta.modified().ok()))
@@ -54,6 +71,8 @@ struct Entry<I> {
     decoded: Option<Decoded<I>>,
     /// The whole-track analysis (with curves) as the JSON the UI receives.
     report: Option<Arc<str>>,
+    /// Integrated loudness, LUFS, read off `report` (None for silence), for matching versions.
+    loudness: Option<f64>,
     /// Couldn't be decoded or analysed as it is: not tried again until the file changes.
     failed: bool,
 }
@@ -110,16 +129,27 @@ impl<I: Clone> Prepared<I> {
         }
         let mut entries = self.entries.lock().unwrap();
         let used: usize = entries.iter().filter(|(p, _)| p.as_str() != path).filter_map(|(_, e)| e.decoded.as_ref()).map(Decoded::bytes).sum();
-        let entry = entries.entry(path.to_owned()).or_insert(Entry { stamp, decoded: None, report: None, failed: false });
+        let entry = entries.entry(path.to_owned()).or_insert(Entry { stamp, decoded: None, report: None, loudness: None, failed: false });
         if entry.stamp != stamp {
-            *entry = Entry { stamp, decoded: None, report: None, failed: false };
+            *entry = Entry { stamp, decoded: None, report: None, loudness: None, failed: false };
         }
         if let Some(d) = decoded.filter(|d| entry.decoded.is_none() && used + d.bytes() <= BUDGET_BYTES) {
             entry.decoded = Some(d.clone());
         }
-        if report.is_some() {
-            entry.report = report;
+        if let Some(report) = report {
+            entry.loudness = integrated_of(&report);
+            entry.report = Some(report);
         }
+    }
+
+    /// Integrated loudness of each of `paths`, LUFS, where it's been measured for the file as it
+    /// is now (None: not yet, not wanted, or silent).
+    pub fn loudness(&self, paths: &[String]) -> Vec<Option<f64>> {
+        let entries = self.entries.lock().unwrap();
+        paths
+            .iter()
+            .map(|p| entries.get(p).filter(|e| e.report.is_some() && stamp_of(Path::new(p)) == Some(e.stamp)).and_then(|e| e.loudness))
+            .collect()
     }
 
     /// The slot's file's analysis, made after loading it: kept if the file is wanted.
@@ -130,7 +160,7 @@ impl<I: Clone> Prepared<I> {
 
     pub fn fail(&self, path: &str, stamp: Stamp) {
         if self.is_wanted(path) {
-            self.entries.lock().unwrap().insert(path.to_owned(), Entry { stamp, decoded: None, report: None, failed: true });
+            self.entries.lock().unwrap().insert(path.to_owned(), Entry { stamp, decoded: None, report: None, loudness: None, failed: true });
         }
     }
 

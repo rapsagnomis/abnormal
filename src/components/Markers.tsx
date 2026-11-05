@@ -124,6 +124,12 @@ export function MarkerLayer({ markers, view, editing, onChange, onEdit }: Props)
     const m = list.find((m) => m.time === time);
     if (m && m.note !== note) onChange(list.map((m) => (m.time === time ? { ...m, note } : m)));
   };
+  /** The note closed: kept with its text, or the marker dropped if it was left empty. */
+  const closeNote = (time: number, note: string) => {
+    const list = current.current;
+    if (note) setNote(time, note);
+    else if (list.some((m) => m.time === time)) onChange(list.filter((m) => m.time !== time));
+  };
 
   return (
     <>
@@ -165,6 +171,7 @@ export function MarkerLayer({ markers, view, editing, onChange, onEdit }: Props)
           // Looked up after layout: a marker just added has no flag yet while this renders.
           anchor={() => flags.current.get(markers[index].time) ?? null}
           onNote={(note) => setNote(markers[index].time, note)}
+          onDone={(note) => closeNote(markers[index].time, note)}
           onDelete={() => {
             onChange(markers.filter((_, i) => i !== index));
             onEdit(null);
@@ -177,12 +184,14 @@ export function MarkerLayer({ markers, view, editing, onChange, onEdit }: Props)
 }
 
 /** A marker's note opened in full, like a post-it: one line (wrapped on the paper), saved as it's
- *  typed and on closing (Enter, Esc or a click elsewhere); (−) in the corner deletes the marker. */
+ *  typed and on closing (Enter, Esc or a click elsewhere), where an empty note drops its marker;
+ *  (−) in the corner deletes the marker. */
 function NoteEditor({
   marker,
   number,
   anchor,
   onNote,
+  onDone,
   onDelete,
   onClose,
 }: {
@@ -191,6 +200,8 @@ function NoteEditor({
   /** The marker's flag, to open under. */
   anchor: () => HTMLElement | null;
   onNote: (note: string) => void;
+  /** Closing, with the note trimmed (empty: drop the marker). */
+  onDone: (note: string) => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
@@ -198,9 +209,10 @@ function NoteEditor({
   const [pos, setPos] = useState<CSSProperties | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const text = useRef<HTMLTextAreaElement>(null);
-  const latest = useRef({ note, onNote, deleted: false });
+  const latest = useRef({ note, onNote, onDone, deleted: false });
   latest.current.note = note;
   latest.current.onNote = onNote;
+  latest.current.onDone = onDone;
 
   // Fixed under the flag (above it near the bottom of the window), so the lane's clipping doesn't cut it off.
   useLayoutEffect(() => {
@@ -220,14 +232,15 @@ function NoteEditor({
     el.style.height = `${el.scrollHeight}px`;
   }, [note, pos]);
 
-  // Saved after a pause in typing, and when the note closes (trimmed), unless it was deleted.
+  // Saved after a pause in typing, and when the note closes (trimmed; empty drops the marker),
+  // unless it was deleted.
   useEffect(() => {
     const timer = setTimeout(() => latest.current.onNote(note), SAVE_DELAY_MS);
     return () => clearTimeout(timer);
   }, [note]);
   useEffect(
     () => () => {
-      if (!latest.current.deleted) latest.current.onNote(latest.current.note.trim());
+      if (!latest.current.deleted) latest.current.onDone(latest.current.note.trim());
     },
     [],
   );

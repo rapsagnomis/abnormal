@@ -10,11 +10,11 @@ import type { Slot } from "./api";
 export interface ComparedPair {
   /** Engine slots of the track and the reference. */
   slots: [Slot, Slot];
-  /** Their lane letters, e.g. ["C", "B"]. */
+  /** Their lane numbers, e.g. ["3", "2"]. */
   labels: [string, string];
 }
 
-export const PairContext = createContext<ComparedPair>({ slots: [0, 1], labels: ["A", "B"] });
+export const PairContext = createContext<ComparedPair>({ slots: [0, 1], labels: ["1", "2"] });
 
 export const usePair = () => useContext(PairContext);
 

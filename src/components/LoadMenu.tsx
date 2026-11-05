@@ -15,6 +15,14 @@ const clickFeedback = (button: HTMLElement | null) => {
 export interface LoadTargets {
   lanes: { slot: Slot; label: string; path: string | null; name: string | null }[];
   into: (slot: Slot, path: string) => void;
+  /** What the library was opened for from a lane's menu (its number and what loading does), shown
+   *  first; null when it was opened on its own. */
+  target: { label: string; text: string; load: (path: string) => void } | null;
+  /** Add the file as a reference of the current song (its lane number and name), or null
+   *  without one. */
+  asReference: { label: string; name: string; add: (path: string) => void } | null;
+  /** Make the file the session's default reference. */
+  asDefault: (path: string) => void;
   /** Letter of the lane "New track" would go to (the first empty one, else a new one), or null
    *  when all 26 are in use. */
   newLabel: string | null;
@@ -74,7 +82,7 @@ export function LoadMenu({ path, copies = [] }: { path: string; copies?: string[
     const r = button.current.getBoundingClientRect();
     const left = Math.max(8, Math.min(r.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8));
     // Rows near the bottom of the window open upwards.
-    const below = window.innerHeight - r.bottom > 40 + 30 * (targets.lanes.length + 1);
+    const below = window.innerHeight - r.bottom > 40 + 30 * (targets.lanes.length + 3);
     setPos(below ? { left, top: r.bottom + 4 } : { left, bottom: window.innerHeight - r.top + 4 });
   };
   const pick = (load: () => void) => {
@@ -98,6 +106,18 @@ export function LoadMenu({ path, copies = [] }: { path: string; copies?: string[
       </button>
       {pos && (
         <div ref={menu} className="load-menu" role="menu" style={{ ...pos, width: MENU_WIDTH }}>
+          {targets.target && (
+            <button
+              role="menuitem"
+              className="load-menu-target"
+              style={{ "--lane-color": `var(--lane-${targets.target.label.toLowerCase()})` } as CSSProperties}
+              onClick={() => pick(() => targets.target!.load(path))}
+              title={`${targets.target.text} (what the Library was opened for)`}
+            >
+              <span className="load-menu-letter">{targets.target.label}</span>
+              <span className="load-menu-name">{targets.target.text}</span>
+            </button>
+          )}
           {targets.lanes.map((lane) => (
             <button
               key={lane.slot}
@@ -111,6 +131,28 @@ export function LoadMenu({ path, copies = [] }: { path: string; copies?: string[
               {isHere(lane.path) && <span className="load-menu-check">✓</span>}
             </button>
           ))}
+          {targets.asReference && (
+            <button
+              role="menuitem"
+              className="load-menu-new"
+              style={{ "--lane-color": `var(--lane-${targets.asReference.label.toLowerCase()})` } as CSSProperties}
+              onClick={() => pick(() => targets.asReference!.add(path))}
+              title={`Add as a reference of ${targets.asReference.name} (${targets.asReference.label}): it's compared with it, and shown under its lane`}
+            >
+              <span className="load-menu-letter">R</span>
+              <span className="load-menu-name">Reference of {targets.asReference.label} · {targets.asReference.name}</span>
+            </button>
+          )}
+          <button
+            role="menuitem"
+            className="load-menu-new"
+            style={{ "--lane-color": "var(--lane-r)" } as CSSProperties}
+            onClick={() => pick(() => targets.asDefault(path))}
+            title="Make it the default reference: every song without its own is compared with it"
+          >
+            <span className="load-menu-letter">R</span>
+            <span className="load-menu-name">Default reference</span>
+          </button>
           <button
             role="menuitem"
             className="load-menu-new"

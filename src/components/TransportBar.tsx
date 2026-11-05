@@ -27,12 +27,12 @@ interface Props {
   curveMode: CurveMode;
   onTogglePlay: () => void;
   onToStart: () => void;
-  onSkip: (seconds: number) => void;
   onSelect: (slot: Slot) => void;
   onToggleLinked: () => void;
   /** Player mode: tracks play one after another, in lane order. */
   playerMode: boolean;
-  onTogglePlayerMode: () => void;
+  /** Play the tracks one after another (true) or all together (false). */
+  onPlayerMode: (on: boolean) => void;
   onCurveMode: (mode: CurveMode) => void;
   display: Display;
   onDisplay: (d: Display) => void;
@@ -65,30 +65,54 @@ export function TransportBar(p: Props) {
         <button onClick={p.onToStart} disabled={!any} title="Back to start (Home, ⌘←)">
           ⏮
         </button>
-        <button onClick={() => p.onSkip(-5)} disabled={!any} title="Back 5 s (←)">
-          −5s
-        </button>
-        <button className="play" onClick={p.onTogglePlay} disabled={!any} title="Play / pause (Space)">
+        <button className="play" onClick={p.onTogglePlay} disabled={!any} title="Play / pause (Space) · ← / → move 5 s (⇧ for 1 s)">
           {p.playing ? "❚❚" : "▶"}
         </button>
-        <button onClick={() => p.onSkip(5)} disabled={!any} title="Forward 5 s (→)">
-          +5s
-        </button>
         <button
-          className={`toggle player-mode${p.playerMode ? " on" : ""}`}
-          onClick={p.onTogglePlayerMode}
-          aria-pressed={p.playerMode}
-          aria-label="Player mode"
+          className={`toggle link-toggle${p.linked ? " on" : ""}`}
+          onClick={p.onToggleLinked}
+          aria-pressed={p.linked}
+          aria-label="Link the tracks"
           title={
-            p.playerMode
-              ? "Player mode (P): tracks play one after another, in lane order. Click to play them together again"
-              : "Player mode (P): play the tracks one after another, like an ordinary player, instead of all together"
+            p.linked
+              ? "Linked (K): the tracks seek, select and zoom together. Click to unlink"
+              : "Link the tracks (K): seek, select and zoom them together"
           }
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M5 6l6 6-6 6M13 6l6 6-6 6" />
+          {/* A play triangle with a chain link at its foot. */}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M5 4v12l9.5-6z" />
+            <path d="M14.5 20.5H13a2.5 2.5 0 0 1 0-5h1.5M17.5 15.5H19a2.5 2.5 0 0 1 0 5h-1.5M14.5 18h3" />
           </svg>
         </button>
+        {/* How the tracks play: all together (parallel lanes) or one after another (a staircase). */}
+        <div className="segmented play-mode" role="radiogroup" aria-label="Play mode">
+          <Glide />
+          <button
+            role="radio"
+            aria-checked={!p.playerMode}
+            className={p.playerMode ? "" : "on"}
+            onClick={() => p.onPlayerMode(false)}
+            aria-label="Parallel"
+            title="Parallel (P): every track plays at once, switching only changes which one you hear"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M4 7h16M4 12h16M4 17h16" />
+            </svg>
+          </button>
+          <button
+            role="radio"
+            aria-checked={p.playerMode}
+            className={p.playerMode ? "on" : ""}
+            onClick={() => p.onPlayerMode(true)}
+            aria-label="Player"
+            title="Player (P): the tracks play one after another, in lane order, like an ordinary player"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M3 7h6M9 12h6M15 17h6" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Listen to: adding/removing tracks (always at the same place), then which track is heard. */}
@@ -127,7 +151,7 @@ export function TransportBar(p: Props) {
                 className={`slot-${label.toLowerCase()}${p.active === slot ? " on" : ""}${role ? ` in-pair role-${role}` : ""}`}
                 onClick={() => p.onSelect(slot)}
                 disabled={!loaded}
-                title={`Listen to ${label} (number-row key ${i + 1}) — Tab switches mix ⇄ reference${role === "track" ? " · mix" : role === "reference" ? " · reference" : ""}`}
+                title={`Listen to track ${label} (number-row key ${i + 1}) — Tab switches current ⇄ reference${role === "track" ? " · current" : role === "reference" ? " · reference" : ""}`}
               >
                 {label}
                 {loaded && <LevelMeter level={p.levels[slot] ?? 0} />}
@@ -177,13 +201,6 @@ export function TransportBar(p: Props) {
             </button>
           ))}
         </div>
-        <button
-          className={`toggle${p.linked ? " on" : ""}`}
-          onClick={p.onToggleLinked}
-          title="Link playheads, selections and zoom across tracks (K)"
-        >
-          Link
-        </button>
       </div>
     </footer>
   );

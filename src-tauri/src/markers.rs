@@ -5,6 +5,7 @@
 //! decoded samples), so moving, renaming or retagging a file keeps them, and identical copies share
 //! them. Each entry also remembers the paths it was seen at. When a file's audio is new but its
 //! path is known (a mix re-bounced over the same file), the notes carry over to the new audio.
+//! Markers without a note aren't saved (one is dropped while its note is still being written).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -92,18 +93,21 @@ impl Markers {
         f(db.get_or_insert_with(|| Db::load(&self.path)))
     }
 
-    /// Markers for the audio `id` opened from `path` (see `Db::find`).
+    /// Markers for the audio `id` opened from `path` (see `Db::find`); empty ones saved before
+    /// they were left out are skipped.
     pub fn get(&self, id: &str, path: &str) -> Vec<Marker> {
-        let (markers, changed) = self.with(|db| db.find(id, path));
+        let (mut markers, changed) = self.with(|db| db.find(id, path));
         if changed {
             let _ = self.save();
         }
+        markers.retain(|m| !m.note.trim().is_empty());
         markers
     }
 
-    /// Replace the markers of audio `id` (sorted by time; none removes its entry) and save.
+    /// Replace the markers of audio `id` (sorted by time, without the ones with no note; none
+    /// removes its entry) and save.
     pub fn set(&self, id: &str, path: &str, mut markers: Vec<Marker>) -> Result<(), String> {
-        markers.retain(|m| m.time.is_finite() && m.time >= 0.0);
+        markers.retain(|m| m.time.is_finite() && m.time >= 0.0 && !m.note.trim().is_empty());
         markers.sort_by(|a, b| a.time.total_cmp(&b.time));
         self.with(|db| {
             if markers.is_empty() {

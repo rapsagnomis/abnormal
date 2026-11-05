@@ -1,16 +1,12 @@
-/* Garabosse (CUTE licence, see assets/fonts/garabosse), Perle cut: the app title only. */
+/* Blur (Neville Brody, FontShop), Light web cut: the app title only. */
 @font-face {
-  font-family: "Garabosse Perle";
-  src: url("./assets/fonts/garabosse/Garabosse-Perle.woff2") format("woff2");
+  font-family: "Blur Web";
+  src: url("./assets/fonts/blur/BlurWeb-Light.woff2") format("woff2");
   font-display: block;
-  /* The font's own metrics (850/350) centre the line box 0.15em below the capitals' centre
-     (cap height 800), so the title sat high in the header. 1000/200 centres it on the capitals. */
-  ascent-override: 100%;
-  descent-override: 20%;
 }
 
 :root {
-  --font-display: "Garabosse Perle", Georgia, serif;
+  --font-display: "Blur Web", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-text: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, sans-serif;
 
   --bg: #121417;
@@ -20,68 +16,68 @@
   --text: #e4e7ec;
   --text-dim: #8a93a1;
   --danger: #ef6b6b;
-  /* Lane colours by letter; extra tracks use hues clear of A's cyan and B's orange. */
-  --lane-a: #3fc5d3;
-  --lane-b: #f1a24a;
-  --lane-c: #a48cf0;
-  --lane-d: #82cf6c;
-  --lane-e: #ea7aab;
-  --lane-f: #e2cb55;
-  --lane-g: #6b93f5;
-  --lane-h: #b5bfcc;
+  /* Lane colours by number; extra tracks use hues clear of 1’s cyan and 2’s orange. */
+  --lane-1: #3fc5d3;
+  --lane-2: #f1a24a;
+  --lane-3: #a48cf0;
+  --lane-4: #82cf6c;
+  --lane-5: #ea7aab;
+  --lane-6: #e2cb55;
+  --lane-7: #6b93f5;
+  --lane-8: #b5bfcc;
   /* I–Z: golden-angle hues, alternating lightness (26 tracks can't all be far apart). */
-  --lane-i: #e67487;
-  --lane-j: #51e063;
-  --lane-k: #a374e6;
-  --lane-l: #e0b651;
-  --lane-m: #74e6e6;
-  --lane-n: #e051b6;
-  --lane-o: #a3e674;
-  --lane-p: #5163e0;
-  --lane-q: #e68774;
-  --lane-r: #51e093;
-  --lane-s: #ca74e6;
-  --lane-t: #dae051;
-  --lane-u: #74c0e6;
-  --lane-v: #e05186;
-  --lane-w: #7de674;
-  --lane-x: #6f51e0;
-  --lane-y: #e6ad74;
-  --lane-z: #51e0c2;
+  --lane-9: #e67487;
+  --lane-10: #51e063;
+  --lane-11: #a374e6;
+  --lane-12: #e0b651;
+  --lane-13: #74e6e6;
+  --lane-14: #e051b6;
+  --lane-15: #a3e674;
+  --lane-16: #5163e0;
+  --lane-17: #e68774;
+  --lane-18: #51e093;
+  --lane-19: #ca74e6;
+  --lane-20: #dae051;
+  --lane-21: #74c0e6;
+  --lane-22: #e05186;
+  --lane-23: #7de674;
+  --lane-24: #6f51e0;
+  --lane-25: #e6ad74;
+  --lane-26: #51e0c2;
   /* The compared pair's colours: A and B here; the analysis panel points them at its pair. */
-  --a: var(--lane-a);
-  --b: var(--lane-b);
+  --a: var(--lane-1);
+  --b: var(--lane-2);
   --playhead: #ffffff;
   /* Chart marks: A/B hues stepped into the dark-mode band (OKLCH L 0.48–0.67), validated
      for CVD separation and contrast against --panel. */
-  --series-lane-a: #1fa3b0;
-  --series-lane-b: #cc7d26;
-  --series-lane-c: #8a6fe0;
-  --series-lane-d: #4fa83a;
-  --series-lane-e: #d1578d;
-  --series-lane-f: #b39a22;
-  --series-lane-g: #4f78e0;
-  --series-lane-h: #8d97a5;
-  --series-lane-i: #cf344e;
-  --series-lane-j: #29b13a;
-  --series-lane-k: #7534cf;
-  --series-lane-l: #b18a29;
-  --series-lane-m: #34cfcf;
-  --series-lane-n: #b12989;
-  --series-lane-o: #75cf34;
-  --series-lane-p: #293ab1;
-  --series-lane-q: #cf4e34;
-  --series-lane-r: #29b168;
-  --series-lane-s: #a834cf;
-  --series-lane-t: #abb129;
-  --series-lane-u: #349bcf;
-  --series-lane-v: #b1295c;
-  --series-lane-w: #41cf34;
-  --series-lane-x: #4629b1;
-  --series-lane-y: #cf8234;
-  --series-lane-z: #29b195;
-  --series-a: var(--series-lane-a);
-  --series-b: var(--series-lane-b);
+  --series-lane-1: #1fa3b0;
+  --series-lane-2: #cc7d26;
+  --series-lane-3: #8a6fe0;
+  --series-lane-4: #4fa83a;
+  --series-lane-5: #d1578d;
+  --series-lane-6: #b39a22;
+  --series-lane-7: #4f78e0;
+  --series-lane-8: #8d97a5;
+  --series-lane-9: #cf344e;
+  --series-lane-10: #29b13a;
+  --series-lane-11: #7534cf;
+  --series-lane-12: #b18a29;
+  --series-lane-13: #34cfcf;
+  --series-lane-14: #b12989;
+  --series-lane-15: #75cf34;
+  --series-lane-16: #293ab1;
+  --series-lane-17: #cf4e34;
+  --series-lane-18: #29b168;
+  --series-lane-19: #a834cf;
+  --series-lane-20: #abb129;
+  --series-lane-21: #349bcf;
+  --series-lane-22: #b1295c;
+  --series-lane-23: #41cf34;
+  --series-lane-24: #4629b1;
+  --series-lane-25: #cf8234;
+  --series-lane-26: #29b195;
+  --series-a: var(--series-lane-1);
+  --series-b: var(--series-lane-2);
   /* Single-series difference curves: neutral, so it never reads as A or B. */
   --series-diff: #b9c0cc;
 
@@ -140,21 +136,141 @@ button:focus-visible {
   outline-offset: 1px;
 }
 
+/* The heard track's colour, set inline on .app: registered so it crossfades on a switch. */
+@property --ambient {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: transparent;
+}
+/* How far the switch flash has run out from the playhead. */
+@property --flash-reach {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+
 .app {
   /* Re-resolved here: lane colours may be repointed on this element (cover colours, set inline),
      and the pair colours must follow them. */
-  --a: var(--lane-a);
-  --b: var(--lane-b);
-  --series-a: var(--series-lane-a);
-  --series-b: var(--series-lane-b);
+  --a: var(--lane-1);
+  --b: var(--lane-2);
+  --series-a: var(--series-lane-1);
+  --series-b: var(--series-lane-2);
   display: grid;
   /* Never wider than the window: a wide row (the transport with many tracks) wraps instead of
      widening the column and pushing the panel and header off the right edge. */
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100%;
   gap: 10px;
   padding: 12px 16px 8px;
+  /* Ambient glow: a faint wash of the heard track's colour from the top left, and less from the
+     bottom right, behind everything. */
+  background:
+    radial-gradient(1100px 520px at 18% -8%, color-mix(in srgb, var(--ambient) 13%, transparent), transparent 70%),
+    radial-gradient(900px 600px at 88% 112%, color-mix(in srgb, var(--ambient) 7%, transparent), transparent 70%),
+    var(--bg);
+  transition: --ambient 700ms ease;
+}
+
+/* Focus while playing: the lanes not heard and the panel step back, and come forward on hover. */
+.lane-body {
+  transition:
+    opacity 220ms ease,
+    filter 500ms ease;
+}
+.app.playing .lane:not(.active):not(:hover) > .lane-body {
+  filter: saturate(0.55) brightness(0.75);
+}
+.app.playing .lane:not(.active):not(:hover) > .lane-header {
+  opacity: 0.7;
+}
+.lane-header {
+  transition: opacity 500ms ease;
+}
+.app.playing .panel-slot:not(:hover):not(:focus-within) .panel {
+  opacity: 0.72;
+}
+
+/* Switch flash: the lane just switched to lights up from its playhead outwards. */
+.switch-flash {
+  --flash: color-mix(in srgb, var(--accent) 55%, #ffffff 15%);
+  position: absolute;
+  inset: 8px 10px 4px;
+  z-index: 3;
+  border-radius: 6px;
+  pointer-events: none;
+  mix-blend-mode: plus-lighter;
+  background: linear-gradient(
+    90deg,
+    transparent calc(var(--at) - var(--flash-reach) - 4%),
+    var(--flash) calc(var(--at) - var(--flash-reach)),
+    transparent calc(var(--at) - var(--flash-reach) + 16%),
+    transparent calc(var(--at) + var(--flash-reach) - 16%),
+    var(--flash) calc(var(--at) + var(--flash-reach)),
+    transparent calc(var(--at) + var(--flash-reach) + 4%)
+  );
+  animation: switch-flash 650ms cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+@keyframes switch-flash {
+  from {
+    --flash-reach: 0%;
+    opacity: 0.9;
+  }
+  to {
+    --flash-reach: 75%;
+    opacity: 0;
+  }
+}
+
+/* Version flip: the number rolls in, the lane glows briefly in its colour. */
+.version-roll {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+.version-num {
+  display: inline-block;
+}
+.version-num.roll-up {
+  animation: roll-up 320ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.version-num.roll-down {
+  animation: roll-down 320ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+@keyframes roll-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+@keyframes roll-down {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+}
+.version-tint {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: version-tint 700ms ease-out forwards;
+}
+@keyframes version-tint {
+  from {
+    box-shadow:
+      inset 0 0 0 1.5px var(--accent),
+      inset 0 0 48px -12px var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  to {
+    box-shadow:
+      inset 0 0 0 1.5px transparent,
+      inset 0 0 48px -12px transparent;
+    background: transparent;
+  }
 }
 
 /* Title | the comparison (centred) | output status. */
@@ -167,38 +283,33 @@ button:focus-visible {
   gap: 16px;
 }
 /* The library: the one way in to finding references, so it stands out in the header. */
-.header-status .library-toggle {
+/* The two drawers, Library and Analysis: icon and label, each in its own colour. */
+.header-status .header-toggle {
+  --tone: #5b8def;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
   font-weight: 600;
-  color: #dfe8ff;
-  background: color-mix(in srgb, #5b8def 26%, var(--panel-raised));
-  border-color: color-mix(in srgb, #5b8def 60%, var(--border));
+  color: color-mix(in srgb, var(--tone) 18%, #ffffff);
+  background: color-mix(in srgb, var(--tone) 26%, var(--panel-raised));
+  border-color: color-mix(in srgb, var(--tone) 60%, var(--border));
 }
-.header-status .library-toggle:hover:not(:disabled) {
-  background: color-mix(in srgb, #5b8def 38%, var(--panel-raised));
-  border-color: #5b8def;
+.header-status .header-toggle:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--tone) 38%, var(--panel-raised));
+  border-color: var(--tone);
 }
-.header-status .library-toggle.on {
+.header-status .header-toggle.on {
   color: #ffffff;
-  background: #5b8def;
-  border-color: #5b8def;
+  background: var(--tone);
+  border-color: var(--tone);
 }
-.header-status .library-toggle svg {
+.header-status .analysis-toggle {
+  --tone: #2fa588;
+}
+.header-status .header-toggle svg {
   width: 16px;
   height: 16px;
-}
-.header-status .library-toggle kbd {
-  padding: 0 5px;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 16px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.25);
-  opacity: 0.85;
 }
 .header-status {
   justify-self: end;
@@ -217,7 +328,7 @@ button:focus-visible {
   margin: 2px 0;
   background: var(--border);
 }
-.app-header h1 {
+.app-header .app-name {
   margin: 0;
   font-family: var(--font-display);
   font-size: 30px;
@@ -248,7 +359,7 @@ button:focus-visible {
 }
 
 .lane {
-  --accent: var(--lane-a);
+  --accent: var(--lane-1);
   position: relative;
   display: grid;
   grid-template-rows: auto 1fr;
@@ -257,86 +368,83 @@ button:focus-visible {
   border: 1px solid var(--border);
   border-radius: 10px;
 }
-.lane.slot-b {
-  --accent: var(--lane-b);
+.lane.slot-2 {
+  --accent: var(--lane-2);
 }
-.lane.slot-c {
-  --accent: var(--lane-c);
+.lane.slot-3 {
+  --accent: var(--lane-3);
 }
-.lane.slot-d {
-  --accent: var(--lane-d);
+.lane.slot-4 {
+  --accent: var(--lane-4);
 }
-.lane.slot-e {
-  --accent: var(--lane-e);
+.lane.slot-5 {
+  --accent: var(--lane-5);
 }
-.lane.slot-f {
-  --accent: var(--lane-f);
+.lane.slot-6 {
+  --accent: var(--lane-6);
 }
-.lane.slot-g {
-  --accent: var(--lane-g);
+.lane.slot-7 {
+  --accent: var(--lane-7);
 }
-.lane.slot-h {
-  --accent: var(--lane-h);
+.lane.slot-8 {
+  --accent: var(--lane-8);
 }
-.lane.slot-i {
-  --accent: var(--lane-i);
+.lane.slot-9 {
+  --accent: var(--lane-9);
 }
-.lane.slot-j {
-  --accent: var(--lane-j);
+.lane.slot-10 {
+  --accent: var(--lane-10);
 }
-.lane.slot-k {
-  --accent: var(--lane-k);
+.lane.slot-11 {
+  --accent: var(--lane-11);
 }
-.lane.slot-l {
-  --accent: var(--lane-l);
+.lane.slot-12 {
+  --accent: var(--lane-12);
 }
-.lane.slot-m {
-  --accent: var(--lane-m);
+.lane.slot-13 {
+  --accent: var(--lane-13);
 }
-.lane.slot-n {
-  --accent: var(--lane-n);
+.lane.slot-14 {
+  --accent: var(--lane-14);
 }
-.lane.slot-o {
-  --accent: var(--lane-o);
+.lane.slot-15 {
+  --accent: var(--lane-15);
 }
-.lane.slot-p {
-  --accent: var(--lane-p);
+.lane.slot-16 {
+  --accent: var(--lane-16);
 }
-.lane.slot-q {
-  --accent: var(--lane-q);
+.lane.slot-17 {
+  --accent: var(--lane-17);
 }
-.lane.slot-r {
-  --accent: var(--lane-r);
+.lane.slot-18 {
+  --accent: var(--lane-18);
 }
-.lane.slot-s {
-  --accent: var(--lane-s);
+.lane.slot-19 {
+  --accent: var(--lane-19);
 }
-.lane.slot-t {
-  --accent: var(--lane-t);
+.lane.slot-20 {
+  --accent: var(--lane-20);
 }
-.lane.slot-u {
-  --accent: var(--lane-u);
+.lane.slot-21 {
+  --accent: var(--lane-21);
 }
-.lane.slot-v {
-  --accent: var(--lane-v);
+.lane.slot-22 {
+  --accent: var(--lane-22);
 }
-.lane.slot-w {
-  --accent: var(--lane-w);
+.lane.slot-23 {
+  --accent: var(--lane-23);
 }
-.lane.slot-x {
-  --accent: var(--lane-x);
+.lane.slot-24 {
+  --accent: var(--lane-24);
 }
-.lane.slot-y {
-  --accent: var(--lane-y);
+.lane.slot-25 {
+  --accent: var(--lane-25);
 }
-.lane.slot-z {
-  --accent: var(--lane-z);
+.lane.slot-26 {
+  --accent: var(--lane-26);
 }
 .lane {
   transition: border-color 160ms ease, box-shadow 220ms ease, background-color 220ms ease, opacity 220ms ease;
-}
-.lane-body {
-  transition: opacity 220ms ease;
 }
 /* Clipped only while its row grows or shrinks, so menus inside the lane aren't cut off. */
 .lane.resizing {
@@ -367,14 +475,14 @@ button:focus-visible {
     0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent),
     0 0 18px -6px color-mix(in srgb, var(--accent) 45%, transparent);
 }
-.lane.in-pair .lane-header {
+.lane.in-pair > .lane-header {
   background: linear-gradient(90deg, color-mix(in srgb, var(--accent) var(--pair-header), transparent), transparent 65%);
 }
-.lane.outside-pair:not(.active) .lane-body {
+.lane.outside-pair:not(.active) > .lane-body {
   opacity: 0.45;
 }
-.lane.outside-pair:not(.active) .lane-title,
-.lane.outside-pair:not(.active) .lane-cover {
+.lane.outside-pair:not(.active) > .lane-header .lane-title,
+.lane.outside-pair:not(.active) > .lane-header .lane-cover {
   opacity: 0.6;
 }
 .role-chip {
@@ -405,6 +513,15 @@ button:focus-visible {
   padding: 5px 7px;
   color: var(--text-dim);
 }
+/* Pinning as the reference stands out, in the lane's colour. */
+.reference-pin,
+.reference-pin:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.reference-pin:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
 /* Normalize on: in the lane's colour, like the trim it adds. */
 .normalize-button.on,
 .normalize-button.on:hover:not(:disabled) {
@@ -416,13 +533,13 @@ button:focus-visible {
 .lane.selectable:hover {
   border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
 }
-.lane.selectable .lane-header {
+.lane.selectable > .lane-header {
   cursor: pointer;
 }
-.lane.selectable:hover .slot-badge {
+.lane.selectable:hover > .lane-header .slot-badge {
   background: color-mix(in srgb, var(--accent) 22%, var(--panel-raised));
 }
-.lane.selectable.outside-pair:hover .lane-body {
+.lane.selectable.outside-pair:hover > .lane-body {
   opacity: 0.85;
 }
 .lane.active {
@@ -478,7 +595,7 @@ body.dragging-lane * {
   border-bottom: 1px solid var(--border);
 }
 /* Decoding or measuring: a sweep along the header's bottom edge, in the lane's colour. */
-.lane.busy .lane-header::after {
+.lane.busy > .lane-header::after {
   content: "";
   position: absolute;
   left: 0;
@@ -499,7 +616,7 @@ body.dragging-lane * {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
-.lane.active .slot-badge {
+.lane.active > .lane-header .slot-badge {
   background: var(--accent);
   color: #10161a;
 }
@@ -553,11 +670,11 @@ body.dragging-lane * {
   transition: transform 120ms, opacity 120ms;
 }
 .drop-zone:hover:not(:disabled) svg,
-.lane.drop-target .drop-zone svg {
+.lane.drop-target > .lane-body .drop-zone svg {
   opacity: 1;
   transform: translateY(-2px);
 }
-.lane.drop-target .drop-zone {
+.lane.drop-target > .lane-body .drop-zone {
   border-color: var(--accent);
   color: var(--text);
 }
@@ -620,7 +737,7 @@ body.dragging-lane * {
   cursor: text;
   overflow: hidden;
 }
-.lane:not(.active) .waveform-canvas {
+.lane:not(.active) > .lane-body .waveform-canvas {
   --wave: color-mix(in srgb, var(--accent) 50%, #3a3f47);
 }
 .waveform-canvas canvas {
@@ -938,109 +1055,109 @@ body.dragging-volume * {
   font-size: 16px;
   background: var(--panel-raised);
 }
-.ab-switch .slot-a {
-  --accent: var(--lane-a);
-  color: var(--lane-a);
+.ab-switch .slot-1 {
+  --accent: var(--lane-1);
+  color: var(--lane-1);
 }
-.ab-switch .slot-b {
-  --accent: var(--lane-b);
-  color: var(--lane-b);
+.ab-switch .slot-2 {
+  --accent: var(--lane-2);
+  color: var(--lane-2);
 }
-.ab-switch .slot-c {
-  --accent: var(--lane-c);
-  color: var(--lane-c);
+.ab-switch .slot-3 {
+  --accent: var(--lane-3);
+  color: var(--lane-3);
 }
-.ab-switch .slot-d {
-  --accent: var(--lane-d);
-  color: var(--lane-d);
+.ab-switch .slot-4 {
+  --accent: var(--lane-4);
+  color: var(--lane-4);
 }
-.ab-switch .slot-e {
-  --accent: var(--lane-e);
-  color: var(--lane-e);
+.ab-switch .slot-5 {
+  --accent: var(--lane-5);
+  color: var(--lane-5);
 }
-.ab-switch .slot-f {
-  --accent: var(--lane-f);
-  color: var(--lane-f);
+.ab-switch .slot-6 {
+  --accent: var(--lane-6);
+  color: var(--lane-6);
 }
-.ab-switch .slot-g {
-  --accent: var(--lane-g);
-  color: var(--lane-g);
+.ab-switch .slot-7 {
+  --accent: var(--lane-7);
+  color: var(--lane-7);
 }
-.ab-switch .slot-h {
-  --accent: var(--lane-h);
-  color: var(--lane-h);
+.ab-switch .slot-8 {
+  --accent: var(--lane-8);
+  color: var(--lane-8);
 }
-.ab-switch .slot-i {
-  --accent: var(--lane-i);
-  color: var(--lane-i);
+.ab-switch .slot-9 {
+  --accent: var(--lane-9);
+  color: var(--lane-9);
 }
-.ab-switch .slot-j {
-  --accent: var(--lane-j);
-  color: var(--lane-j);
+.ab-switch .slot-10 {
+  --accent: var(--lane-10);
+  color: var(--lane-10);
 }
-.ab-switch .slot-k {
-  --accent: var(--lane-k);
-  color: var(--lane-k);
+.ab-switch .slot-11 {
+  --accent: var(--lane-11);
+  color: var(--lane-11);
 }
-.ab-switch .slot-l {
-  --accent: var(--lane-l);
-  color: var(--lane-l);
+.ab-switch .slot-12 {
+  --accent: var(--lane-12);
+  color: var(--lane-12);
 }
-.ab-switch .slot-m {
-  --accent: var(--lane-m);
-  color: var(--lane-m);
+.ab-switch .slot-13 {
+  --accent: var(--lane-13);
+  color: var(--lane-13);
 }
-.ab-switch .slot-n {
-  --accent: var(--lane-n);
-  color: var(--lane-n);
+.ab-switch .slot-14 {
+  --accent: var(--lane-14);
+  color: var(--lane-14);
 }
-.ab-switch .slot-o {
-  --accent: var(--lane-o);
-  color: var(--lane-o);
+.ab-switch .slot-15 {
+  --accent: var(--lane-15);
+  color: var(--lane-15);
 }
-.ab-switch .slot-p {
-  --accent: var(--lane-p);
-  color: var(--lane-p);
+.ab-switch .slot-16 {
+  --accent: var(--lane-16);
+  color: var(--lane-16);
 }
-.ab-switch .slot-q {
-  --accent: var(--lane-q);
-  color: var(--lane-q);
+.ab-switch .slot-17 {
+  --accent: var(--lane-17);
+  color: var(--lane-17);
 }
-.ab-switch .slot-r {
-  --accent: var(--lane-r);
-  color: var(--lane-r);
+.ab-switch .slot-18 {
+  --accent: var(--lane-18);
+  color: var(--lane-18);
 }
-.ab-switch .slot-s {
-  --accent: var(--lane-s);
-  color: var(--lane-s);
+.ab-switch .slot-19 {
+  --accent: var(--lane-19);
+  color: var(--lane-19);
 }
-.ab-switch .slot-t {
-  --accent: var(--lane-t);
-  color: var(--lane-t);
+.ab-switch .slot-20 {
+  --accent: var(--lane-20);
+  color: var(--lane-20);
 }
-.ab-switch .slot-u {
-  --accent: var(--lane-u);
-  color: var(--lane-u);
+.ab-switch .slot-21 {
+  --accent: var(--lane-21);
+  color: var(--lane-21);
 }
-.ab-switch .slot-v {
-  --accent: var(--lane-v);
-  color: var(--lane-v);
+.ab-switch .slot-22 {
+  --accent: var(--lane-22);
+  color: var(--lane-22);
 }
-.ab-switch .slot-w {
-  --accent: var(--lane-w);
-  color: var(--lane-w);
+.ab-switch .slot-23 {
+  --accent: var(--lane-23);
+  color: var(--lane-23);
 }
-.ab-switch .slot-x {
-  --accent: var(--lane-x);
-  color: var(--lane-x);
+.ab-switch .slot-24 {
+  --accent: var(--lane-24);
+  color: var(--lane-24);
 }
-.ab-switch .slot-y {
-  --accent: var(--lane-y);
-  color: var(--lane-y);
+.ab-switch .slot-25 {
+  --accent: var(--lane-25);
+  color: var(--lane-25);
 }
-.ab-switch .slot-z {
-  --accent: var(--lane-z);
-  color: var(--lane-z);
+.ab-switch .slot-26 {
+  --accent: var(--lane-26);
+  color: var(--lane-26);
 }
 .slot-switch {
   position: relative;
@@ -1160,55 +1277,6 @@ body.dragging-volume * {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
   font-size: 13px;
 }
-/* Streaming preview: opens under its button like Export, but from the left. */
-.streaming-menu {
-  right: auto;
-  left: 0;
-  gap: 2px;
-  width: 280px;
-  transform-origin: top left;
-}
-.streaming-menu > button {
-  display: flex;
-  justify-content: space-between;
-  padding: 4px 8px;
-  border: none;
-  background: transparent;
-  text-align: left;
-}
-.streaming-menu > button:hover:not(:disabled) {
-  background: var(--panel-raised);
-  border: none;
-}
-.streaming-menu > button.on {
-  background: #2d3a52;
-}
-.streaming-target {
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-}
-.streaming-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-.streaming-detail .export-status {
-  margin: 0;
-}
-.streaming-gains {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.streaming-menu > .export-status:last-child {
-  margin: 6px 0 0;
-  font-size: 11px;
-}
 /* Buttons that open a menu: label, then a chevron. */
 .toggle:has(.chevron),
 .load-menu-button {
@@ -1251,22 +1319,27 @@ body.dragging-volume * {
   background: #2d3a52;
   border-color: #5b8def;
 }
-.transport .player-mode {
+/* Link the tracks: an icon toggle next to play. */
+.transport .link-toggle {
   display: grid;
   place-items: center;
-  padding: 5px 8px;
+  padding: 4px 8px;
 }
-.transport .player-mode svg {
+.transport .link-toggle svg {
+  width: 17px;
+  height: 17px;
+}
+/* Parallel | Player: two icon buttons. */
+.transport .play-mode button {
+  display: grid;
+  place-items: center;
+  padding: 4px 8px;
+}
+.transport .play-mode svg {
   width: 16px;
   height: 16px;
 }
 
-.hints {
-  margin: 0;
-  color: var(--text-dim);
-  font-size: 12px;
-  text-align: center;
-}
 
 .scrollbar {
   position: relative;
@@ -1413,13 +1486,70 @@ kbd {
 
 /* ── Workspace: lanes + analysis panel ─────────────── */
 
+/* The analysis panel is a drawer: it slides in over the lanes (transform and opacity only, so no
+   layout or redrawing while it moves), and the lanes' column narrows once it's in (`panel-closed`
+   goes after the slide); closing, the column widens at once, under the panel, which slides away. */
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 400px;
-  gap: 10px;
+  column-gap: 10px;
   min-height: 0;
   position: relative;
 }
+.workspace.panel-closed {
+  grid-template-columns: minmax(0, 1fr) 0px;
+  column-gap: 0px;
+}
+.panel-slot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: grid;
+  width: 400px;
+  min-height: 0;
+  /* Slid out, the panel is cut off at the slot's right edge (no sideways scrolling); its shadow
+     over the lanes on the left is kept. */
+  clip-path: inset(-24px 0 -24px -48px);
+}
+.panel-slot > .panel {
+  min-height: 0;
+  transition:
+    transform 260ms cubic-bezier(0.3, 0.7, 0.3, 1),
+    opacity 200ms ease;
+}
+.workspace.panel-hidden .panel-slot {
+  pointer-events: none;
+}
+.workspace.panel-hidden .panel-slot > .panel {
+  transform: translateX(calc(100% + 16px));
+  opacity: 0;
+}
+/* Over the lanes while sliding: a shadow keeps its edge readable. */
+.workspace.panel-closed:not(.panel-hidden) .panel-slot > .panel {
+  box-shadow: -10px 0 24px rgba(0, 0, 0, 0.35);
+}
+.panel-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.panel-top .tabs {
+  flex: 1;
+}
+.panel-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-dim);
+  border-color: transparent;
+  background: transparent;
+}
+.panel-close svg,
 
 /* The library slides in over the lanes, against the analysis panel (400 px + the 10 px gap). */
 .library-drawer {
@@ -1428,6 +1558,7 @@ kbd {
   bottom: 0;
   right: 410px;
   z-index: 15;
+  transition: right 260ms cubic-bezier(0.3, 0.7, 0.3, 1);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1439,6 +1570,11 @@ kbd {
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.45);
   overflow-y: auto;
   animation: drawer-in 180ms ease-out;
+}
+/* With the analysis panel closed, the library sits against the right edge. */
+.workspace.panel-hidden .library-drawer {
+  right: 0;
+  width: min(480px, 100%);
 }
 @keyframes drawer-in {
   from {
@@ -1728,9 +1864,25 @@ body.dragging-track * {
 .pair-picker select.col-b {
   color: var(--b);
 }
-/* "Reference" after the mix's picker: a little apart, so each label reads with its own picker. */
+/* The current song, then what it's compared with: a little apart. */
 .pair-vs {
   margin-left: 6px;
+}
+.pair-song {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--a);
+  border-radius: 6px;
+}
+.pair-song-name {
+  color: var(--text);
+  font-weight: 500;
+}
+.pair-picker select.col-b {
+  max-width: 240px;
 }
 
 .match-controls {
@@ -2625,21 +2777,52 @@ button.busy::after {
   gap: 10px;
   min-width: 0;
 }
-.header-session h1 {
+.session-relinked {
   flex: none;
-  margin-right: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-color: transparent;
+  background: transparent;
+  animation: fade-in 0.2s ease;
 }
-.session-button {
+.header-session {
+  position: relative;
+}
+/* The title opens the app menu (sessions, exports, shortcuts); the session's name sits after it. */
+.app-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: -8px;
+  padding: 4px 10px 4px 8px;
+  border-color: transparent;
+  background: transparent;
+}
+.app-title:hover:not(:disabled),
+.app-title.open {
+  border-color: var(--border);
+  background: var(--panel-raised);
+}
+.app-title .app-name {
+  flex: none;
+}
+.app-title .chevron {
+  color: var(--text-dim);
+}
+.app-title-session {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   max-width: 220px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-dim);
 }
-.session-button svg:first-child {
-  flex: none;
-  width: 15px;
-  height: 15px;
+.app-title.saved .app-title-session {
+  color: #4ade80;
 }
 .session-name {
   overflow: hidden;
@@ -2654,21 +2837,81 @@ button.busy::after {
   border-radius: 50%;
   background: var(--text-dim);
 }
-/* Just saved: green for a moment. */
-.session-button.saved,
-.session-button.saved:hover:not(:disabled) {
-  color: #4ade80;
-  border-color: color-mix(in srgb, #4ade80 60%, var(--border));
-  background: color-mix(in srgb, #4ade80 12%, var(--panel-raised));
-  transition: color 200ms, border-color 200ms, background 200ms;
-}
 .session-saved-check {
   flex: none;
   font-weight: 700;
 }
-.notes-export {
+/* Export as Zip: opens from the left. */
+.zip-export {
   flex: none;
+}
+.zip-menu {
+  right: auto;
+  left: 0;
+  width: 340px;
+  transform-origin: top left;
+}
+.zip-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.zip-tracks label {
+  min-width: 0;
+}
+.zip-lane {
+  flex: none;
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: #0b0d10;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.zip-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.zip-tracks .chart-note {
+  flex: none;
+}
+.export-menu .zip-field {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+.zip-field > span {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.zip-field input[type="text"],
+.zip-field select {
+  min-width: 0;
+  padding: 4px 7px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.zip-field input[type="text"]:focus,
+.zip-field select:focus {
+  border-color: #5b8def;
+}
+.zip-field .segmented {
+  justify-self: start;
 }
 .session-menu kbd {
   flex: none;
@@ -2825,7 +3068,6 @@ button.busy::after {
   color: var(--text-dim);
 }
 .versions-letter {
-  margin-right: 4px;
   color: var(--lane-color);
 }
 /* The song's name, edited in place. */
@@ -2951,9 +3193,21 @@ button.busy::after {
   background: var(--danger);
   border-color: var(--danger);
 }
-.versions-add {
-  align-self: flex-start;
+.versions-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.versions-add,
+.versions-match {
   font-weight: 600;
+}
+/* A version's loudness and the gain matching gives it. */
+.version-loudness {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
 }
 .versions-drawer .chart-note {
   margin: 0;
@@ -2984,4 +3238,257 @@ button.busy::after {
   color: var(--danger);
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+/* ── A song's own reference: nested at the bottom of its lane, indented, with a thread back to it ── */
+
+.lane.has-ref {
+  grid-template-rows: auto minmax(0, 1fr) minmax(0, 0.8fr);
+}
+.lane.ref-lane {
+  margin: 2px 8px 8px 26px;
+  border-style: dashed;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 4%, #1b1e23);
+}
+/* The thread from the song to its reference. */
+.lane.ref-lane::before {
+  content: "";
+  position: absolute;
+  left: -15px;
+  top: -6px;
+  width: 11px;
+  height: 22px;
+  border-left: 1.5px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-bottom: 1.5px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-bottom-left-radius: 6px;
+  pointer-events: none;
+}
+.lane.ref-lane > .lane-header {
+  gap: 8px;
+  padding: 4px 8px;
+  cursor: default;
+}
+.lane.ref-lane > .lane-header .slot-badge {
+  width: auto;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 5px;
+  font-size: 12px;
+}
+.lane.ref-lane > .lane-header .lane-cover {
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+}
+.lane.ref-lane > .lane-header .track-meta {
+  display: none;
+}
+.lane.ref-lane > .lane-body {
+  padding: 4px 8px 4px;
+}
+.role-chip.ref-of {
+  background: transparent;
+  border: 1px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.song-references {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 -12px -12px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+.song-references.drop-target {
+  background: color-mix(in srgb, var(--lane-color) 8%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--lane-color) 45%, transparent);
+}
+.version-artist {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+/* ── The session's default reference: a strip above the lanes ── */
+
+.default-ref {
+  display: grid;
+  min-height: 0;
+  border-radius: 10px;
+  transition: box-shadow 160ms ease;
+}
+.default-ref.drop-target {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lane-r, #c8bfa8) 70%, transparent);
+}
+.default-ref .lane.default-lane {
+  margin: 0;
+}
+.default-ref .lane.default-lane::before {
+  content: none;
+}
+.default-ref-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.default-ref-empty button {
+  flex: none;
+  padding: 3px 9px;
+  font-size: 12px;
+}
+.default-ref-badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-weight: 700;
+  color: #c8bfa8;
+}
+.default-ref-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.default-ref-text strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.default-ref-move {
+  margin-left: auto;
+}
+
+/* A lane's Open / Add / Replace menu: from a file, or from the Library. */
+.source-menu-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--text-dim);
+}
+.source-menu-key {
+  flex: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+/* What the Library was opened for, first in its Load menus. */
+.load-menu button.load-menu-target {
+  margin-bottom: 4px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--lane-color, #5b8def) 14%, transparent);
+  box-shadow: 0 5px 0 -4px var(--border);
+}
+
+/* Export as Zip opens from the app menu, under the title. */
+.export.zip-export {
+  position: static;
+}
+.zip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.session-menu-divider {
+  margin: 4px 0;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── Keyboard shortcuts pop-up ── */
+
+.shortcuts-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.45);
+  animation: fade-in 140ms ease-out;
+}
+.shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(760px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  outline: none;
+  animation: pop-in 150ms ease-out;
+}
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.shortcuts-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.shortcuts-groups {
+  columns: 2 300px;
+  column-gap: 28px;
+}
+.shortcuts-group {
+  break-inside: avoid;
+  margin-bottom: 14px;
+}
+.shortcuts-group h3 {
+  margin: 0 0 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.shortcuts-group dl {
+  margin: 0;
+}
+.shortcut {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.shortcut dt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.shortcut dd {
+  margin: 0;
+  color: var(--text);
+}
+.shortcut kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--panel-raised);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.shortcuts .chart-note {
+  margin: 0;
 }

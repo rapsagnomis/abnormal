@@ -28,6 +28,15 @@ realfft = "3.5.0"
 rustfft = "6"
 ureq = { version = "2", features = ["json", "cookies"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+base64 = "0.22"
+flacenc = { version = "0.5", default-features = false, features = ["par"] }
+mp3lame-encoder = { version = "0.3", features = ["std"] }
+zip = { version = "9", default-features = false, features = ["time"] }
+
+# Bookmarks, to find a session's files again after a rename or move (`relink.rs`).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSError", "NSString", "NSURL"] }
 
 # Decoding/DSP is painfully slow without optimisation, even in dev builds.
 [profile.dev]

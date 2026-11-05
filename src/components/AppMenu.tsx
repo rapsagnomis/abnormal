@@ -10,7 +10,7 @@ const SAVED_RING: Keyframe[] = [
   { boxShadow: "0 0 0 0 rgba(74, 222, 128, 0.75)" },
   { boxShadow: "0 0 0 6px rgba(74, 222, 128, 0)" },
 ];
-/** How long the button reads "Saved" after a save. */
+/** How long the title reads "Saved" after a save. */
 const SAVED_MS = 1600;
 
 interface Props {
@@ -18,7 +18,7 @@ interface Props {
   name: string | null;
   /** The lanes differ from the session as saved. */
   modified: boolean;
-  /** Some track is loaded, so there's something to save. */
+  /** Some track is loaded, so there's something to save or export. */
   canSave: boolean;
   /** Counts saves: each new value shows the "Saved" feedback. */
   saves: number;
@@ -28,12 +28,19 @@ interface Props {
   onOpenPath: (path: string) => void;
   onSave: () => void;
   onSaveAs: () => void;
+  onExportNotes: () => void;
+  /** What the last notes export did ("Exported", or the error), shown by the title for a moment. */
+  notesStatus: string | null;
+  onExportZip: () => void;
+  onShortcuts: () => void;
 }
 
 const MENU_WIDTH = 270;
 
-/** "Session ▾": open, save, and the recent sessions one click away. */
-export function SessionMenu({ name, modified, canSave, saves, onOpen, onNew, onOpenPath, onSave, onSaveAs }: Props) {
+/** The app's menu, on its title: sessions (new, open, save, recent), exports and the keyboard
+ *  shortcuts. The open session's name sits by the title. */
+export function AppMenu(p: Props) {
+  const { name, modified, canSave, saves } = p;
   const [pos, setPos] = useState<CSSProperties | null>(null);
   const [recent, setRecent] = useState<RecentSession[]>([]);
   const button = useRef<HTMLButtonElement>(null);
@@ -69,7 +76,7 @@ export function SessionMenu({ name, modified, canSave, saves, onOpen, onNew, onO
   const toggle = () => {
     if (pos || !button.current) return setPos(null);
     const r = button.current.getBoundingClientRect();
-    setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - MENU_WIDTH - 8)), top: r.bottom + 4, width: MENU_WIDTH });
+    setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - MENU_WIDTH - 8)), top: r.bottom + 6, width: MENU_WIDTH });
     api.recentSessions().then(setRecent).catch(() => setRecent([]));
   };
   const pick = (action: () => void) => {
@@ -77,49 +84,49 @@ export function SessionMenu({ name, modified, canSave, saves, onOpen, onNew, onO
     action();
   };
 
+  const status = justSaved ? `Saved${name ? ` ${name}` : ""}` : p.notesStatus ? `Notes: ${p.notesStatus}` : name;
   return (
     <>
       <button
         ref={button}
-        className={`session-button${pos ? " open" : ""}${justSaved ? " saved" : ""}`}
+        className={`app-title${pos ? " open" : ""}${justSaved ? " saved" : ""}`}
         onClick={toggle}
         aria-haspopup="menu"
         aria-expanded={!!pos}
-        title={name ? `Session “${name}”${modified ? " (changed since saved)" : ""}: open, save, recent sessions` : "Sessions: save these tracks in order, open one, or a recent one"}
+        title={`Sessions, exports and keyboard shortcuts${name ? ` · session “${name}”${modified ? " (changed since saved)" : ""}` : ""}`}
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M4 6h11M4 12h11M4 18h7M18 14v7M14.5 17.5 18 21l3.5-3.5" />
-        </svg>
-        <span className="session-name">{justSaved ? `Saved ${name ?? ""}`.trim() : (name ?? "Session")}</span>
-        {justSaved ? (
-          <span className="session-saved-check" aria-hidden="true">✓</span>
-        ) : (
-          name && modified && <span className="session-modified" aria-label="changed since saved" />
-        )}
+        <span className="app-name">(a/b)normal</span>
         <Chevron />
+        {status && (
+          <span className="app-title-session">
+            {justSaved && <span className="session-saved-check" aria-hidden="true">✓ </span>}
+            <span className="session-name">{status}</span>
+            {!justSaved && !p.notesStatus && name && modified && <span className="session-modified" aria-label="changed since saved" />}
+          </span>
+        )}
       </button>
       {pos && (
         <div ref={menu} className="load-menu session-menu" role="menu" style={pos}>
-          <button role="menuitem" onClick={() => pick(onNew)} title={name ? `Save “${name}”, then start with empty tracks` : "Start with empty tracks"}>
+          <button role="menuitem" onClick={() => pick(p.onNew)} title={name ? `Save “${name}”, then start with empty tracks` : "Start with empty tracks"}>
             <span className="load-menu-name">New session</span>
             <kbd>⌘N</kbd>
           </button>
-          <button role="menuitem" onClick={() => pick(onOpen)}>
+          <button role="menuitem" onClick={() => pick(p.onOpen)}>
             <span className="load-menu-name">Open session…</span>
             <kbd>⌘O</kbd>
           </button>
-          <button role="menuitem" disabled={!canSave} onClick={() => pick(onSave)}>
+          <button role="menuitem" disabled={!canSave} onClick={() => pick(p.onSave)}>
             <span className="load-menu-name">{name ? `Save “${name}”` : "Save session…"}</span>
             <kbd>⌘S</kbd>
           </button>
-          <button role="menuitem" disabled={!canSave} onClick={() => pick(onSaveAs)}>
+          <button role="menuitem" disabled={!canSave} onClick={() => pick(p.onSaveAs)}>
             <span className="load-menu-name">Save session as…</span>
             <kbd>⇧⌘S</kbd>
           </button>
           <div className="session-menu-heading">Open recent</div>
           {recent.length === 0 && <div className="session-menu-empty">No recent sessions</div>}
           {recent.map((r) => (
-            <button key={r.path} role="menuitem" onClick={() => pick(() => onOpenPath(r.path))} title={r.path}>
+            <button key={r.path} role="menuitem" onClick={() => pick(() => p.onOpenPath(r.path))} title={r.path}>
               <span className="load-menu-name">{r.name}</span>
               <span className="session-menu-count">
                 {r.tracks} track{r.tracks === 1 ? "" : "s"}
@@ -138,6 +145,28 @@ export function SessionMenu({ name, modified, canSave, saves, onOpen, onNew, onO
               <span className="load-menu-name">Clear recent</span>
             </button>
           )}
+          <div className="session-menu-heading">Export</div>
+          <button
+            role="menuitem"
+            disabled={!canSave}
+            onClick={() => pick(p.onExportNotes)}
+            title="Every track's notes, song by song, as a Markdown (.md) file"
+          >
+            <span className="load-menu-name">Export notes…</span>
+          </button>
+          <button
+            role="menuitem"
+            disabled={!canSave}
+            onClick={() => pick(p.onExportZip)}
+            title="Every lane's version in front, named and tagged, as WAV, FLAC or MP3 in one zip file"
+          >
+            <span className="load-menu-name">Export as zip…</span>
+          </button>
+          <div className="session-menu-divider" />
+          <button role="menuitem" onClick={() => pick(p.onShortcuts)}>
+            <span className="load-menu-name">Keyboard shortcuts</span>
+            <kbd>?</kbd>
+          </button>
         </div>
       )}
     </>

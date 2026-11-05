@@ -72,6 +72,12 @@ interface Morph {
 }
 const MORPH_MS = 380;
 const DISPLAY_FADE_MS = 320;
+/** Size changes closer together than this are one resize (the window being dragged). */
+const RESIZE_RUN_MS = 150;
+/** A width change bigger than this, alone (the analysis panel docking), crossfades from the old picture. */
+const RESIZE_JUMP_PX = 40;
+/** How long that crossfade takes. */
+const RESIZE_FADE_MS = 180;
 /** With a curve shown, this strip at the right (CSS px) holds its scale labels alone: the time
  *  axis (bars, curve, selection, strips, ruler) is squeezed to end before it, so nothing ever
  *  covers a label and the end of the track stays visible. */
@@ -169,6 +175,10 @@ export function Waveform(props: Props) {
   const [, setBarsSettled] = useState(0);
   const morphFrame = useRef(0);
   useEffect(() => () => cancelAnimationFrame(morphFrame.current), []);
+  /** The size last drawn at, and when it last changed: a lone change (the panel docking) is
+   *  crossfaded, a run of them (the window being resized) is just redrawn. */
+  const shownSize = useRef(size);
+  const resizedAt = useRef(-Infinity);
 
   // Handlers attached natively (wheel must be non-passive) read the latest props from here.
   const latest = useRef(props);
@@ -276,6 +286,27 @@ export function Waveform(props: Props) {
     const w = Math.round(size.width * dpr);
     const h = Math.round(size.height * dpr);
     if (!w || !h) return;
+    // A new size is drawn straight away, never eased (that would restart on every frame of a
+    // resize). A lone one is crossfaded from a copy of what was on screen, which is cheap.
+    const resized = shownSize.current !== size;
+    const lone =
+      resized &&
+      shownSize.current.width > 0 &&
+      Math.abs(size.width - shownSize.current.width) > RESIZE_JUMP_PX &&
+      performance.now() - resizedAt.current > RESIZE_RUN_MS;
+    if (resized) {
+      shownSize.current = size;
+      resizedAt.current = performance.now();
+    }
+    const fadeFrom = (from: HTMLCanvasElement, ms: number) => {
+      const fade = fadeRef.current!;
+      fade.width = from.width;
+      fade.height = from.height;
+      fade.getAnimations().forEach((a) => a.cancel());
+      fade.getContext("2d")!.drawImage(from, 0, 0);
+      if (!reduced()) fade.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, easing: "ease-in-out", fill: "forwards" });
+    };
+    if (lone && canvas.width && display === shownDisplay.current && !reduced()) fadeFrom(canvas, RESIZE_FADE_MS);
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -283,12 +314,7 @@ export function Waveform(props: Props) {
     // Switching between waveform and spectrogram: keep a copy of what was on screen and fade it out.
     if (shownDisplay.current !== display) {
       shownDisplay.current = display;
-      const fade = fadeRef.current!;
-      fade.width = w;
-      fade.height = h;
-      fade.getAnimations().forEach((a) => a.cancel());
-      fade.getContext("2d")!.drawImage(canvas, 0, 0);
-      if (!reduced()) fade.animate([{ opacity: 1 }, { opacity: 0 }], { duration: DISPLAY_FADE_MS, easing: "ease-in-out", fill: "forwards" });
+      fadeFrom(canvas, DISPLAY_FADE_MS);
     }
     const overview = { start: 0, end: duration, peaks };
     const spec = display === "spectrogram" ? [specOverview, specDetail] : null;
@@ -314,7 +340,7 @@ export function Waveform(props: Props) {
     const versionEase = performance.now() - versionAt.current < VERSION_WINDOW_MS;
     const easeMs = gainMoved ? GAIN_EASE_MS : versionEase ? VERSION_EASE_MS : BAR_EASE_MS;
     // (Unchanged heights, e.g. only the playhead moved on a bar: nothing to ease.)
-    const barsMove = fromBars !== targets && !reduced() && fromBars.some((v, i) => v !== targets[i] && !(Number.isNaN(v) && Number.isNaN(targets[i])));
+    const barsMove = !resized && fromBars !== targets && !reduced() && fromBars.some((v, i) => v !== targets[i] && !(Number.isNaN(v) && Number.isNaN(targets[i])));
     // …and a different curve (another mode, a curve switched on or off, a new track) morphs from
     // the one on screen instead of jumping.
     const previous = shownOverlay.current;

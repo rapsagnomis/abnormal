@@ -1,10 +1,10 @@
 mod accent;
 mod activity;
+mod bundle;
 mod decode;
 mod deemix;
 mod dynamics;
 mod eq;
-mod export;
 mod fir;
 mod library;
 mod loudness;
@@ -13,6 +13,7 @@ mod markers;
 mod player;
 mod prepared;
 mod psycho;
+mod relink;
 mod sessions;
 mod similarity;
 mod standing;
@@ -20,6 +21,7 @@ mod spectrogram;
 mod spectrum;
 mod stereo;
 mod stft;
+mod wav;
 #[cfg(test)]
 mod tests;
 
@@ -187,6 +189,13 @@ fn prepare_versions(paths: Vec<String>, app: tauri::AppHandle, versions: State<'
         std::thread::spawn(move || prepare_worker(&versions, &app));
     }
     versions.ready()
+}
+
+/// Integrated loudness (LUFS) of prepared versions, for matching a song's versions; None where
+/// it isn't measured yet (or the file is silent).
+#[tauri::command]
+fn version_loudness(paths: Vec<String>, versions: State<'_, Arc<Versions>>) -> Vec<Option<f64>> {
+    versions.loudness(&paths)
 }
 
 fn prepare_worker(versions: &Versions, app: &tauri::AppHandle) {
@@ -423,30 +432,23 @@ fn set_full_match(slot: usize, enabled: bool, state: State<'_, AppState>) -> Res
     Ok(())
 }
 
-/// Write the track in `slots[0]` to `path` as WAV with its EQ match (`eq`) and/or loudness
-/// matched to the reference in `slots[1]`, levels measured over each one's range (`None` =
-/// whole track), as for the match itself.
+/// Write each lane's front version (`items`, in lane order) into one zip at `path`, encoded as
+/// `format` and tagged with `artist` and `album`. Each file done is announced as a
+/// `zip-progress` event with the number done so far.
 #[tauri::command]
-async fn export_track(
+async fn export_zip(
     path: String,
-    slots: [usize; 2],
-    eq: Option<export::ExportEq>,
-    match_loudness: bool,
-    ranges: [Option<(f64, f64)>; 2],
-    float: bool,
-    state: State<'_, AppState>,
-) -> Result<export::Exported, String> {
-    let [a, b] = pair_audio(&state, slots)?;
-    let a = a.ok_or("load a track to export")?;
-    let b = match (match_loudness, b) {
-        (false, _) => None,
-        (true, Some(b)) => Some(b),
-        (true, None) => return Err("load a reference to match its loudness".into()),
-    };
+    items: Vec<bundle::BundleItem>,
+    format: bundle::Format,
+    artist: String,
+    album: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let reference = b.as_deref().map(|b| (b, to_frame_range(b, ranges[1])));
-        export::export(&PathBuf::from(path), &a, to_frame_range(&a, ranges[0]), eq.as_ref(), reference, float)
-            .map_err(|e| format!("{e:#}"))
+        bundle::write_zip(&PathBuf::from(path), &items, format, artist.trim(), album.trim(), |done| {
+            let _ = app.emit("zip-progress", done);
+        })
+        .map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -527,18 +529,35 @@ fn save_markers(
 
 /// Save the lanes (in order, each with its versions) as a session file, and remember it as recent.
 #[tauri::command]
-fn save_session(path: String, lanes: Vec<sessions::Lane>, recents: State<'_, Arc<sessions::Recents>>) -> Result<sessions::Session, String> {
-    let session = sessions::write(&PathBuf::from(path), &lanes)?;
+fn save_session(
+    path: String,
+    lanes: Vec<sessions::Lane>,
+    default_reference: Option<String>,
+    recents: State<'_, Arc<sessions::Recents>>,
+) -> Result<sessions::Session, String> {
+    let session = sessions::write(&PathBuf::from(path), &lanes, default_reference.as_deref())?;
     recents.touch(&session);
     Ok(session)
 }
 
-/// Read a session file (its lanes, in order), and remember it as recent.
+/// Read a session file (its lanes, in order), and remember it as recent. Off the main thread:
+/// finding files that moved may search the folders around them.
 #[tauri::command]
-fn open_session(path: String, recents: State<'_, Arc<sessions::Recents>>) -> Result<sessions::Session, String> {
-    let session = sessions::read(&PathBuf::from(path))?;
-    recents.touch(&session);
-    Ok(session)
+async fn open_session(path: String, recents: State<'_, Arc<sessions::Recents>>) -> Result<sessions::Session, String> {
+    let recents = recents.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = PathBuf::from(path);
+        let session = sessions::read(&path)?;
+        // Files found elsewhere are saved where they are now (with fresh bookmarks), so the next
+        // open needn't look for them; a session that can't be written (read-only) still opens.
+        if !session.relinked.is_empty() {
+            let _ = sessions::write(&path, &session.lanes, session.default_reference.as_deref());
+        }
+        recents.touch(&session);
+        Ok(session)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Recently saved or opened sessions, most recent first.
@@ -678,14 +697,6 @@ fn set_player_mode(on: bool, order: Vec<usize>, state: State<'_, AppState>) {
     state.player.set_player_mode(on, &order);
 }
 
-/// Per track: limit it like Spotify's Loud setting (see `player::Limiter`).
-#[tauri::command]
-fn set_limiters(on: [bool; player::SLOTS], state: State<'_, AppState>) {
-    for (slot, on) in on.into_iter().enumerate() {
-        state.player.set_limit(slot, on);
-    }
-}
-
 #[tauri::command]
 fn set_volume(gain: f64, state: State<'_, AppState>) {
     state.player.set_volume(gain);
@@ -784,14 +795,13 @@ pub fn run() {
             analyze,
             range_peaks,
             set_trims,
-            set_limiters,
             set_player_mode,
             set_volume,
             set_eq,
             match_eq,
             render_full_match,
             set_full_match,
-            export_track,
+            export_zip,
             spectrogram,
             live_spectrum,
             band_activity,
@@ -810,6 +820,7 @@ pub fn run() {
             save_markers,
             save_session,
             prepare_versions,
+            version_loudness,
             open_session,
             recent_sessions,
             clear_recent_sessions,

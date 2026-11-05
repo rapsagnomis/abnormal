@@ -36,45 +36,6 @@ const UNITY_BITS: u32 = 0x3f80_0000; // 1.0f32
 /// Most EQ moves a track can be auditioned with (6 stereo moves, a width change, 3 side moves).
 pub const MAX_EQ_STAGES: usize = 12;
 
-/// Spotify's "Loud" normalisation limiter, as Spotify documents it: engages at −1 dB sample
-/// value, 5 ms attack, 100 ms decay. Stereo-linked, on the track after its trim.
-pub const LIMIT_CEILING_DB: f32 = -1.0;
-const LIMIT_ATTACK_SECONDS: f32 = 0.005;
-const LIMIT_RELEASE_SECONDS: f32 = 0.1;
-
-/// Peak limiter (no look-ahead): a level envelope rises towards the signal's peak with the attack
-/// time constant and falls with the release; the gain brings that envelope down to the ceiling.
-#[derive(Clone, Copy)]
-pub struct Limiter {
-    ceiling: f32,
-    attack: f32,
-    release: f32,
-    envelope: f32,
-}
-
-impl Limiter {
-    pub fn new(rate: f32) -> Self {
-        Self {
-            ceiling: 10f32.powf(LIMIT_CEILING_DB / 20.0),
-            attack: (-1.0 / (LIMIT_ATTACK_SECONDS * rate)).exp(),
-            release: (-1.0 / (LIMIT_RELEASE_SECONDS * rate)).exp(),
-            envelope: 0.0,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.envelope = 0.0;
-    }
-
-    pub fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
-        let peak = l.abs().max(r.abs());
-        let coef = if peak > self.envelope { self.attack } else { self.release };
-        self.envelope = peak + (self.envelope - peak) * coef;
-        let gain = if self.envelope > self.ceiling { self.ceiling / self.envelope } else { 1.0 };
-        (l * gain, r * gain)
-    }
-}
-
 /// Playback EQ for one track. Filters run even while disabled so switching it on is a crossfade
 /// between warm signals, not a transient.
 #[derive(Clone, Copy, Default)]
@@ -179,8 +140,6 @@ pub struct Shared {
     /// Lane order for player mode (slots), `queue_len` of them.
     queue: [AtomicUsize; SLOTS],
     queue_len: AtomicUsize,
-    /// Per track: run the trimmed signal through the limiter (Spotify Loud preview).
-    limit: [AtomicBool; SLOTS],
     /// App-wide output volume (linear, 0–1, stored as f32 bits), applied after the trims.
     volume: AtomicU32,
     /// Written only by the audio callback.
@@ -228,7 +187,6 @@ impl Shared {
             player_mode: AtomicBool::new(false),
             queue: [const { AtomicUsize::new(0) }; SLOTS],
             queue_len: AtomicUsize::new(0),
-            limit: [const { AtomicBool::new(false) }; SLOTS],
             volume: AtomicU32::new(UNITY_BITS),
             positions: [const { AtomicU64::new(0) }; SLOTS],
             seek_requests: [const { AtomicU64::new(NONE) }; SLOTS],
@@ -309,10 +267,6 @@ impl Shared {
         }
         self.queue_len.store(order.len(), Ordering::Relaxed);
         self.player_mode.store(on, Ordering::Relaxed);
-    }
-
-    pub fn set_limit(&self, slot: usize, on: bool) {
-        self.limit[slot].store(on, Ordering::Relaxed);
     }
 
     /// Output volume for everything, linear; clamped to 0–1 so it only ever attenuates.
@@ -397,7 +351,6 @@ pub(crate) struct Mixer {
     gains: [f32; SLOTS],
     /// Smoothed per-track trims.
     trims: [f32; SLOTS],
-    limiters: [Limiter; SLOTS],
     /// Smoothed output volume.
     volume: f32,
     eq: [EqSettings; SLOTS],
@@ -425,7 +378,6 @@ impl Mixer {
             master: 0.0,
             gains: std::array::from_fn(|i| if i == 0 { 1.0 } else { 0.0 }),
             trims: [1.0; SLOTS],
-            limiters: [Limiter::new(rate as f32); SLOTS],
             volume: 1.0,
             eq: [EqSettings::default(); SLOTS],
             eq_state: [[[[0.0; 2]; 2]; MAX_EQ_STAGES]; SLOTS],
@@ -502,7 +454,6 @@ impl Mixer {
         let trim_targets: [f32; SLOTS] =
             std::array::from_fn(|i| f32::from_bits(shared.trims[i].load(Ordering::Relaxed)));
         let volume_target = f32::from_bits(shared.volume.load(Ordering::Relaxed));
-        let limit: [bool; SLOTS] = std::array::from_fn(|i| shared.limit[i].load(Ordering::Relaxed));
         let loops: [(u64, u64); SLOTS] = std::array::from_fn(|i| {
             (shared.loop_start[i].load(Ordering::Relaxed), shared.loop_end[i].load(Ordering::Relaxed))
         });
@@ -565,11 +516,6 @@ impl Mixer {
                         }
                         sl *= self.trims[i];
                         sr *= self.trims[i];
-                        if limit[i] {
-                            (sl, sr) = self.limiters[i].process(sl, sr);
-                        } else {
-                            self.limiters[i].reset();
-                        }
                         peaks[i] = peaks[i].max(sl.abs().max(sr.abs()) * self.master);
                         l += sl * g;
                         r += sr * g;

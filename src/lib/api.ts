@@ -9,8 +9,8 @@ export const SLOTS: ABSlot[] = [0, 1];
 export const ALL_SLOTS: Slot[] = Array.from({ length: 26 }, (_, i) => i);
 /** Engine slots the extra tracks can take. */
 export const EXTRA_SLOTS: Slot[] = ALL_SLOTS.slice(2);
-/** Labels in display order: A, B, then the extra tracks as C, D, … Z in the order they were added. */
-export const SLOT_LABELS: readonly string[] = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+/** Labels in display order: the lanes' numbers, 1 to 26 (also the keys of their colours, `--lane-N`). */
+export const SLOT_LABELS: readonly string[] = Array.from({ length: 26 }, (_, i) => String(i + 1));
 
 export interface Peaks {
   buckets: number;
@@ -239,6 +239,17 @@ export interface LaneVersions {
   name: string;
   versions: string[];
   front: number;
+  /** The versions play loudness-matched (each turned down to the quietest); left out when off. */
+  matchLoudness?: boolean;
+  /** The song's own reference tracks (file paths): while it's the current track, it's compared
+   *  with the one in use instead of the pinned reference. Left out when there are none. */
+  references?: string[];
+  /** The reference in use; left out when it's the first. */
+  referenceFront?: number;
+  /** In a saved session: compared with another lane (its index) instead of its own references. */
+  compareLane?: number;
+  /** In a saved session: compared with the session's default reference even though it has its own. */
+  compareDefault?: boolean;
 }
 
 /** Saved lanes, in order (`sessions.rs`). */
@@ -247,6 +258,10 @@ export interface Session {
   /** The file's name without extension. */
   name: string;
   lanes: LaneVersions[];
+  /** Compared with by every song without a reference of its own. */
+  defaultReference: string | null;
+  /** Files not at their saved path, found elsewhere (renamed or moved); the session was re-saved with them. */
+  relinked: { from: string; to: string }[];
 }
 
 export interface RecentSession {
@@ -355,16 +370,17 @@ export interface MatchReport extends EqReport {
   full: FullMatch;
 }
 
-/** EQ to render into an export: the chosen moves, or the full match's curves. */
-export type ExportEq = { kind: "moves"; filters: EqFilter[] } | { kind: "full"; mid: number[]; side: number[] };
+/** Export as Zip's encodings: 24-bit WAV, 24-bit FLAC, 320 kb/s MP3. */
+export type ZipFormat = "wav" | "flac" | "mp3";
 
-export interface Exported {
-  /** Gain applied after the EQ, dB. */
-  gainDb: number;
-  /** Integrated loudness of the result over the measured range, LUFS. */
-  loudness: number;
-  /** Sample peak of the result, dBFS (above 0 = clipped, unless written as float). */
-  peakDb: number;
+/** One file of an Export as Zip, in track order. */
+export interface ZipItem {
+  /** The audio file. */
+  source: string;
+  /** File name in the archive, without extension. */
+  name: string;
+  /** Title tag. */
+  title: string;
 }
 
 /** Per-band share of the moment's energy over time (masking view). */
@@ -401,6 +417,8 @@ export const api = {
   /** Keep these files prepared for switching (decoded and analysed in the background); each one
    *  ready is announced as a `version-prepared` event. Returns the ones already ready. */
   prepareVersions: (paths: string[]) => invoke<string[]>("prepare_versions", { paths }),
+  /** Integrated loudness (LUFS) of prepared versions; null where not measured yet (or silent). */
+  versionLoudness: (paths: string[]) => invoke<(number | null)[]>("version_loudness", { paths }),
   unloadTrack: (slot: Slot) => invoke<void>("unload_track", { slot }),
   setPlaying: (playing: boolean) => invoke<void>("set_playing", { playing }),
   setActive: (slot: Slot) => invoke<void>("set_active", { slot }),
@@ -422,13 +440,12 @@ export const api = {
   /** App-wide output volume, linear 0–1. */
   /** Player mode: tracks play one after another in `order` (lane order) instead of together. */
   setPlayerMode: (on: boolean, order: Slot[]) => invoke<void>("set_player_mode", { on, order }),
-  /** Per slot: run it through Spotify Loud's limiter. */
-  setLimiters: (on: boolean[]) => invoke<void>("set_limiters", { on }),
   /** A track's markers: found by its audio, else by its path (a re-bounce over the same file). */
   markers: (audioId: string, path: string) => invoke<Marker[]>("markers", { audioId, path }),
   saveMarkers: (audioId: string, path: string, markers: Marker[]) => invoke<void>("save_markers", { audioId, path, markers }),
   /** Save the lanes (in order, with their versions) as a session; also remembered as recent. */
-  saveSession: (path: string, lanes: LaneVersions[]) => invoke<Session>("save_session", { path, lanes }),
+  saveSession: (path: string, lanes: LaneVersions[], defaultReference: string | null) =>
+    invoke<Session>("save_session", { path, lanes, defaultReference }),
   openSession: (path: string) => invoke<Session>("open_session", { path }),
   recentSessions: () => invoke<RecentSession[]>("recent_sessions"),
   clearRecentSessions: () => invoke<void>("clear_recent_sessions"),
@@ -451,16 +468,10 @@ export const api = {
   renderFullMatch: (slot: Slot, curves: { mid: number[]; side: number[] } | null) =>
     invoke<boolean>("render_full_match", { slot, curves }),
   setFullMatch: (slot: Slot, enabled: boolean) => invoke<void>("set_full_match", { slot, enabled }),
-  /** Write the track (`slots[0]`) as WAV with `eq` and/or its loudness matched to the reference, measured over `ranges`. */
-  exportTrack: (
-    path: string,
-    slots: [Slot, Slot],
-    eq: ExportEq | null,
-    matchLoudness: boolean,
-    ranges: [Region | null, Region | null],
-    float: boolean,
-  ) =>
-    invoke<Exported>("export_track", { path, slots, eq, matchLoudness, ranges: ranges.map((r) => (r ? [r.start, r.end] : null)), float }),
+  /** Write the files into one zip at `path`, tagged with `artist` and `album` (and their title
+   *  and track number); a `zip-progress` event carries the number of files done. */
+  exportZip: (path: string, items: ZipItem[], format: ZipFormat, artist: string, album: string) =>
+    invoke<void>("export_zip", { path, items, format, artist, album }),
   /** The user's Pro-Q 4 "Default Setting" preset text, if any. */
   proQTemplate: () => invoke<string | null>("pro_q_template"),
   libraryStatus: () => invoke<LibraryStatus>("library_status"),

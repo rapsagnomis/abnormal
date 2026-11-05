@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import { SLOT_COUNT } from "../lib/api";
 import type { Slot } from "../lib/api";
 import { flash, LOADED_ROW, RING } from "../lib/motion";
 import { Chevron } from "./Chevron";
@@ -24,7 +25,7 @@ export interface LoadTargets {
   /** Make the file the session's default reference. */
   asDefault: (path: string) => void;
   /** Letter of the lane "New track" would go to (the first empty one, else a new one), or null
-   *  when all 26 are in use. */
+   *  when all 50 are in use. */
   newLabel: string | null;
   loadNew: (path: string) => void;
   /** Start dragging a file from a row (pointer down): dropping it on a lane loads it there. */
@@ -158,7 +159,7 @@ export function LoadMenu({ path, copies = [] }: { path: string; copies?: string[
             className="load-menu-new"
             disabled={!targets.newLabel}
             onClick={() => pick(() => targets.loadNew(path))}
-            title={targets.newLabel ? `Load into a new track (${targets.newLabel})` : "All 26 tracks are in use"}
+            title={targets.newLabel ? `Load into a new track (${targets.newLabel})` : `All ${SLOT_COUNT} tracks are in use`}
           >
             <span className="load-menu-letter">+</span>
             <span className="load-menu-name">New track{targets.newLabel ? ` (${targets.newLabel})` : ""}</span>

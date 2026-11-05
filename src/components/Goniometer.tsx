@@ -3,6 +3,8 @@ import { useEffect, useRef } from "react";
 interface Props {
   label: string;
   color: string;
+  /** The colour `color` resolves to: it's read off the swatch when drawing, so a new one redraws. */
+  tint: string;
   /** Row-major density (top = +mid, left = −side), max cell = 1; null when not loaded. */
   density: number[] | null;
   size: number;
@@ -15,7 +17,7 @@ const PX = 150;
  * wide, and spread along the horizontal axis means out-of-phase content. Drawn with left on the
  * left, as on a hardware goniometer.
  */
-export function Goniometer({ label, color, density, size }: Props) {
+export function Goniometer({ label, color, tint, density, size }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   const swatch = useRef<HTMLElement>(null);
 
@@ -63,7 +65,7 @@ export function Goniometer({ label, color, density, size }: Props) {
     small.getContext("2d")!.putImageData(img, 0, 0);
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(small, 0, 0, w, w);
-  }, [density, size, color]);
+  }, [density, size, color, tint]);
 
   return (
     <figure className="gonio">

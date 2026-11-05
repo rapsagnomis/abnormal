@@ -7,7 +7,7 @@ import { Glide } from "./Glide";
 
 /** A lane that can go into the zip: its song's version in front. */
 export interface ZipTrack {
-  /** The lane's number (1–26). */
+  /** The lane's number (1–50). */
   label: string;
   /** The song's name (given, else the front version's title). */
   title: string;

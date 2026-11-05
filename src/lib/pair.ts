@@ -12,9 +12,11 @@ export interface ComparedPair {
   slots: [Slot, Slot];
   /** Their lane numbers, e.g. ["3", "2"]. */
   labels: [string, string];
+  /** Their colours (CSS values), which `--lane-N` resolve to: drawings on a canvas redraw on a change. */
+  colors: [string, string];
 }
 
-export const PairContext = createContext<ComparedPair>({ slots: [0, 1], labels: ["1", "2"] });
+export const PairContext = createContext<ComparedPair>({ slots: [0, 1], labels: ["1", "2"], colors: ["var(--hue-1)", "var(--hue-2)"] });
 
 export const usePair = () => useContext(PairContext);
 

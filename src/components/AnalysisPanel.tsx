@@ -246,6 +246,7 @@ export function AnalysisPanel(p: Props) {
                   key={i}
                   label={r?.stereo.stats.mono ? `${label(i)} · mono` : label(i)}
                   color={SERIES_COLORS[i]}
+                  tint={p.pair.colors[i]}
                   density={r?.stereo.goniometer ?? null}
                   size={r?.stereo.goniometerSize ?? 1}
                 />

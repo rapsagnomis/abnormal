@@ -55,6 +55,8 @@ struct SessionLane {
     compare_lane: Option<usize>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     compare_default: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -98,6 +100,9 @@ pub struct Lane {
     /// Compared with the session's default reference even though it has its own.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compare_default: bool,
+    /// The colour picked for the song ("#rrggbb"); left out for its automatic one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// A session as opened: where it is, its name (file stem), its lanes, in order, and the files
@@ -174,6 +179,7 @@ pub fn write(path: &Path, lanes: &[Lane], default_reference: Option<&str>) -> Re
                 reference_front: l.reference_front,
                 compare_lane: l.compare_lane,
                 compare_default: l.compare_default,
+                color: l.color.clone(),
             })
             .collect(),
         tracks: Vec::new(),
@@ -251,6 +257,7 @@ pub fn read(path: &Path) -> Result<Session, String> {
                     reference_front,
                     compare_lane: l.compare_lane,
                     compare_default: l.compare_default,
+                    color: l.color,
                 }
             })
             .collect()

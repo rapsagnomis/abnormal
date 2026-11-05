@@ -5,8 +5,10 @@ import { Chevron } from "./Chevron";
 const MENU_WIDTH = 190;
 
 interface Props {
-  /** The button's label: "Open…", "Add…", "Replace…". */
+  /** The button's label: "Open", "Add", "Replace". */
   label: string;
+  /** Extra class for the button, to fit where it sits. */
+  className?: string;
   title?: string;
   disabled?: boolean;
   /** Pick a file in the file dialog. */
@@ -61,7 +63,7 @@ export function SourceMenu(p: Props) {
     <>
       <button
         ref={button}
-        className={`load-menu-button source-menu-button${pos ? " open" : ""}`}
+        className={`load-menu-button source-menu-button${p.className ? ` ${p.className}` : ""}${pos ? " open" : ""}`}
         onClick={toggle}
         disabled={p.disabled}
         title={p.title}

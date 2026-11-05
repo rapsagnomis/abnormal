@@ -20,8 +20,8 @@ use crate::decode::AudioData;
 use crate::eq::{Biquad, Filter, Placement};
 use crate::fir;
 
-/// A and B, then up to 24 extra tracks to switch between (C–Z).
-pub const SLOTS: usize = 26;
+/// Tracks 1 and 2, then up to 48 extra ones (lanes, and the hidden reference slots).
+pub const SLOTS: usize = 50;
 const NONE: u64 = u64::MAX;
 /// Length of A/B crossfades and pause/resume fades.
 const FADE_SECONDS: f32 = 0.015;
@@ -168,12 +168,12 @@ pub struct Shared {
 pub struct Transport {
     pub playing: bool,
     pub active: usize,
-    /// Per track: looping its selection.
-    pub loop_enabled: [bool; SLOTS],
+    /// Per track: looping its selection. (Vecs, not arrays: serde stops at 32 elements.)
+    pub loop_enabled: Vec<bool>,
     /// Playhead per slot, in seconds.
-    pub positions: [f64; SLOTS],
+    pub positions: Vec<f64>,
     /// Peak level per track over the last audio buffer, linear (see `Shared::meters`).
-    pub levels: [f32; SLOTS],
+    pub levels: Vec<f32>,
 }
 
 impl Shared {
@@ -192,7 +192,7 @@ impl Shared {
             seek_requests: [const { AtomicU64::new(NONE) }; SLOTS],
             loop_start: [const { AtomicU64::new(NONE) }; SLOTS],
             loop_end: [const { AtomicU64::new(NONE) }; SLOTS],
-            tracks: Mutex::new(Default::default()),
+            tracks: Mutex::new(std::array::from_fn(|_| Loaded::default())),
             alt_enabled: [const { AtomicBool::new(false) }; SLOTS],
             alt_generation: [const { AtomicU64::new(0) }; SLOTS],
             swaps: [const { AtomicU64::new(0) }; SLOTS],
@@ -333,11 +333,9 @@ impl Shared {
         Transport {
             playing: self.playing.load(Ordering::Relaxed),
             active: self.active.load(Ordering::Relaxed),
-            loop_enabled: std::array::from_fn(|i| self.loop_enabled[i].load(Ordering::Relaxed)),
-            positions: std::array::from_fn(|i| {
-                self.positions[i].load(Ordering::Relaxed) as f64 / rate
-            }),
-            levels: std::array::from_fn(|i| f32::from_bits(self.meters[i].load(Ordering::Relaxed))),
+            loop_enabled: self.loop_enabled.iter().map(|l| l.load(Ordering::Relaxed)).collect(),
+            positions: self.positions.iter().map(|p| p.load(Ordering::Relaxed) as f64 / rate).collect(),
+            levels: self.meters.iter().map(|m| f32::from_bits(m.load(Ordering::Relaxed))).collect(),
         }
     }
 }

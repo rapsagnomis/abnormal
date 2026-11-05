@@ -1,8 +1,10 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { SLOT_COUNT } from "../lib/api";
 import type { LaneVersions, TrackInfo } from "../lib/api";
 import { formatDuration } from "../lib/format";
+import { SourceMenu } from "./SourceMenu";
 
 const signed = (db: number) => `${db > 0 ? "+" : db < 0 ? "−" : ""}${Math.abs(db).toFixed(1)} dB`;
 
@@ -31,6 +33,12 @@ interface Props {
   onAdd: () => void;
   onRemove: (index: number) => void;
   onRename: (name: string) => void;
+  /** The song's colour (a CSS value): the one picked, else `autoColor`. */
+  color: string;
+  /** Its colour when none is picked: its cover's, else its engine slot's hue. */
+  autoColor: string;
+  /** Pick a colour ("#rrggbb"), or null for the automatic one. */
+  onColor: (color: string | null) => void;
   /** The song's reference in use, once loaded. */
   reference: TrackInfo | null;
   referenceLoading: boolean;
@@ -40,11 +48,25 @@ interface Props {
   referenceSetAside: boolean;
   onReference: (index: number) => void;
   onAddReference: () => void;
+  /** Open the Library to add a reference to this song from it. */
+  onLibraryReference: () => void;
   onRemoveReference: (index: number) => void;
   onClose: () => void;
 }
 
 const fileName = (path: string) => path.split("/").pop() ?? path;
+
+/** The lane palette's hues (`--hue-N` in the CSS), offered for a song's colour. */
+const HUES = Array.from({ length: SLOT_COUNT }, (_, i) => `--hue-${i + 1}`);
+/** A palette hue as "#rrggbb", read off the stylesheet (what a song saves). */
+const hueValue = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim().toLowerCase();
+/** A colour for the native picker, which only takes "#rrggbb": a hue (`var(--hue-N)`) is read off
+ *  the stylesheet. */
+const asHex = (color: string) => {
+  const hue = /^var\((--[\w-]+)\)$/.exec(color);
+  const v = (hue ? hueValue(hue[1]) : color).toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(v) ? v : "#888888";
+};
 
 const WIDTH = 380;
 /** Room kept from the window's edges, px. */
@@ -84,6 +106,8 @@ export function VersionsDrawer(p: Props) {
   const { versions, track } = p;
   const ref = useRef<HTMLElement>(null);
   const [pos, setPos] = useState<CSSProperties | null>(null);
+  /** The colour choices are shown, under the header. */
+  const [picking, setPicking] = useState(false);
   const latest = useRef(p);
   latest.current = p;
 
@@ -147,6 +171,7 @@ export function VersionsDrawer(p: Props) {
           <span className="versions-kicker">
             <span className="versions-letter">Track {p.label}</span> · {versions.versions.length} version{versions.versions.length === 1 ? "" : "s"}
           </span>
+          <div className="versions-name-row">
           <input
             className="versions-name"
             value={versions.name}
@@ -160,11 +185,57 @@ export function VersionsDrawer(p: Props) {
             spellCheck={false}
             title="The song's name, for every version of it (empty: the version in front's title)"
           />
+          <button
+            className={`versions-color${picking ? " on" : ""}`}
+            onClick={() => setPicking((v) => !v)}
+            aria-expanded={picking}
+            title="The song's colour: it keeps it wherever its lane is moved"
+            aria-label="Choose the song's colour"
+          />
+          </div>
         </div>
         <button className="library-drawer-close" onClick={p.onClose} title="Close (Esc)" aria-label="Close the versions">
           ✕
         </button>
       </header>
+
+      {picking && (
+        <div className="versions-colors" role="radiogroup" aria-label="The song's colour">
+          <div className="versions-swatches">
+            {HUES.map((hue, i) => {
+              const on = !!versions.color && versions.color.toLowerCase() === hueValue(hue);
+              return (
+                <button
+                  key={hue}
+                  role="radio"
+                  aria-checked={on}
+                  className={`versions-swatch${on ? " on" : ""}`}
+                  style={{ background: `var(${hue})` }}
+                  onClick={() => p.onColor(hueValue(hue))}
+                  title={`Colour ${i + 1}`}
+                  aria-label={`Colour ${i + 1}`}
+                />
+              );
+            })}
+          </div>
+          <div className="versions-color-actions">
+            <button
+              role="radio"
+              aria-checked={!versions.color}
+              className={`versions-auto${versions.color ? "" : " on"}`}
+              onClick={() => p.onColor(null)}
+              title="Its cover's colour when it has a colourful one, else the colour it was given when loaded"
+            >
+              <span className="versions-swatch" style={{ background: p.autoColor }} aria-hidden="true" />
+              Automatic
+            </button>
+            <label className="versions-custom" title="Any colour">
+              <input type="color" value={asHex(p.color)} onChange={(e) => p.onColor(e.target.value)} />
+              Custom…
+            </label>
+          </div>
+        </div>
+      )}
 
       <ol className="versions-list">
         {versions.versions.map((path, i) => {
@@ -288,9 +359,13 @@ export function VersionsDrawer(p: Props) {
           </ol>
         )}
         <div className="versions-actions">
-          <button className="versions-add" onClick={p.onAddReference} title="Add one or more files as references of this song">
-            + Add Reference
-          </button>
+          <SourceMenu
+            label="+ Add Reference"
+            className="versions-add"
+            title="Add references to this song: from files or the Library"
+            onFile={p.onAddReference}
+            onLibrary={p.onLibraryReference}
+          />
         </div>
         <p className="chart-note">
           While this song is the current track it's compared with its reference in use, shown under its lane (Tab switches between them). Drop files here, or

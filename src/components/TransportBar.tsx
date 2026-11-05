@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Glide } from "./Glide";
 import { LevelMeter } from "./LevelMeter";
+import { SLOT_COUNT } from "../lib/api";
 import type { Slot } from "../lib/api";
 import type { CurveMode } from "../lib/overlay";
 import type { Display } from "./Waveform";
@@ -20,7 +21,7 @@ interface Props {
   /** Another track can be added (up to Z). */
   canAdd: boolean;
   onAdd: () => void;
-  /** Close an extra lane (C–Z). */
+  /** Close an extra lane (3 onwards). */
   onRemove: (slot: Slot) => void;
   /** Close the last extra lane. */
   onRemoveLast: () => void;
@@ -129,7 +130,7 @@ export function TransportBar(p: Props) {
           <button
             onClick={p.onAdd}
             disabled={!p.canAdd}
-            title={p.canAdd ? "Add another track to switch to (up to Z)" : "All 26 tracks are in use"}
+            title={p.canAdd ? `Add another track to switch to (up to ${SLOT_COUNT})` : `All ${SLOT_COUNT} tracks are in use`}
             aria-label="Add a track"
           >
             +

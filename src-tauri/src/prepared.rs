@@ -89,7 +89,7 @@ pub struct Prepared<I> {
 
 impl<I: Clone> Prepared<I> {
     pub fn new() -> Self {
-        Self { entries: Mutex::default(), wanted: Mutex::default(), slots: Mutex::new(Default::default()), working: AtomicBool::new(false) }
+        Self { entries: Mutex::default(), wanted: Mutex::default(), slots: Mutex::new(std::array::from_fn(|_| None)), working: AtomicBool::new(false) }
     }
 
     /// Keep these files prepared (and only these).

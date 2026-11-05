@@ -685,8 +685,8 @@ fn rescan_when_idle(library: Arc<Library>, app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn set_trims(db: [f64; SLOTS], state: State<'_, AppState>) {
-    for (slot, d) in db.into_iter().enumerate() {
+fn set_trims(db: Vec<f64>, state: State<'_, AppState>) {
+    for (slot, d) in db.into_iter().enumerate().take(SLOTS) {
         state.player.set_trim_db(slot, d);
     }
 }
@@ -764,7 +764,7 @@ pub fn run() {
         .manage(AppState {
             player,
             audio_error,
-            tracks: Arc::new(Mutex::new(Default::default())),
+            tracks: Arc::new(Mutex::new(std::array::from_fn(|_| None))),
             opened: Mutex::new(Vec::new()),
         })
         .setup(|app| {

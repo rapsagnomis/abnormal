@@ -3,7 +3,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { ALL_SLOTS, api, AUDIO_EXTENSIONS, EXTRA_SLOTS, isAudioFile, isSessionFile, SESSION_EXTENSION, SLOT_LABELS } from "./lib/api";
+import { ALL_SLOTS, api, AUDIO_EXTENSIONS, EXTRA_SLOTS, isAudioFile, isSessionFile, SESSION_EXTENSION, SLOT_COUNT, SLOT_LABELS } from "./lib/api";
 import type {
   AnalysisReport,
   ZipFormat,
@@ -43,6 +43,7 @@ import type { DragItem, LoadTargets } from "./components/LoadMenu";
 import { LibraryDrawer } from "./components/LibraryDrawer";
 import { AppMenu } from "./components/AppMenu";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
+import { SourceMenu } from "./components/SourceMenu";
 import { ZipExport } from "./components/ZipExport";
 import type { ZipTrack } from "./components/ZipExport";
 import { defaultName, VersionsDrawer } from "./components/VersionsDrawer";
@@ -65,6 +66,7 @@ const songKey = (l: LaneVersions) => [
   l.references?.length ? (l.referenceFront ?? 0) : 0,
   l.compareLane ?? null,
   !!l.compareDefault,
+  l.color ?? null,
 ];
 const setAt = <P extends unknown[]>(p: P, slot: Slot, v: P[number]): P => {
   const next = [...p] as P;
@@ -457,7 +459,7 @@ export default function App() {
 
   /** Load dropped or opened files. One file goes into the lane it was dropped on (else the first
    *  empty one, else a new lane, else A). Several fill the lane they were dropped on, then the empty
-   *  lanes after it (then before it), then new lanes, up to 26 tracks; `play` starts the first. */
+   *  lanes after it (then before it), then new lanes, up to 50 tracks; `play` starts the first. */
   const loadPaths = useCallback(
     (paths: string[], target: Slot | null, play = false) => {
       const audio = paths.filter(isAudioFile);
@@ -484,7 +486,7 @@ export default function App() {
       if (slots.length === 0) slots.push(0);
       audio.slice(0, slots.length).forEach((path, i) => loadFile(slots[i], path, play && i === 0));
       const left = audio.length - slots.length;
-      if (left > 0) setErrors((e) => setAt(e, slots[slots.length - 1], `${left} more file${left === 1 ? "" : "s"} not loaded: all 26 tracks are in use`));
+      if (left > 0) setErrors((e) => setAt(e, slots[slots.length - 1], `${left} more file${left === 1 ? "" : "s"} not loaded: all ${SLOT_COUNT} tracks are in use`));
     },
     [loadFile],
   );
@@ -850,7 +852,7 @@ export default function App() {
   };
 
   /** Add up to `n` empty lanes at the end, to drop or open files into; their slots (fewer when
-   *  the 26 run out). Works from the latest order, so several calls in one event don't collide. */
+   *  the 50 run out). Works from the latest order, so several calls in one event don't collide. */
   const addExtras = (n: number): Slot[] => {
     const { companions: refs, defaultSlot: def } = latest.current;
     const taken = new Set<Slot>([...latest.current.order, ...latest.current.leaving, ...refs.filter((c): c is Slot => c !== null), ...(def === null ? [] : [def])]);
@@ -969,7 +971,7 @@ export default function App() {
   addExtrasRef.current = addExtras;
 
   /** Where the library's Load menu can put a file: any lane, or "New track" — the first empty
-   *  lane, else a new one (while under 26). */
+   *  lane, else a new one (while under 50). */
   const emptyLane = order.find((s) => !tracks[s] && !loading[s] && !leaving.includes(s));
   /** Drag a library row onto a lane (pointer events: Tauri's native file drop swallows HTML5
    *  drag and drop). A press becomes a drag after a few pixels; buttons in the row keep their clicks. */
@@ -1142,7 +1144,7 @@ export default function App() {
     const taken = () => [...next.filter((x): x is Slot => x !== null), ...(def === null ? [] : [def])];
     if (defaultRef) {
       def ??= freeReferenceSlot(taken());
-      if (def === null) setErrors((e) => setAt(e, lanes[0], "No room for the default reference: all 26 tracks are in use"));
+      if (def === null) setErrors((e) => setAt(e, lanes[0], `No room for the default reference: all ${SLOT_COUNT} tracks are in use`));
       else fillCompanion(def, defaultRef);
     }
     for (const owner of lanes) {
@@ -1153,7 +1155,7 @@ export default function App() {
       if (c === null) {
         c = freeReferenceSlot(taken());
         if (c === null) {
-          setErrors((e) => setAt(e, owner, "No room for this song's reference: all 26 tracks are in use"));
+          setErrors((e) => setAt(e, owner, `No room for this song's reference: all ${SLOT_COUNT} tracks are in use`));
           continue;
         }
         next = setAt(next, owner, c);
@@ -1273,6 +1275,13 @@ export default function App() {
   const toggleVersionMatch = (slot: Slot) =>
     setVersions((v) => (v[slot] ? setAt(v, slot, { ...v[slot]!, matchLoudness: !v[slot]!.matchLoudness || undefined }) : v));
   const renameSong = (slot: Slot, name: string) => setVersions((v) => (v[slot] ? setAt(v, slot, { ...v[slot]!, name }) : v));
+  /** Give a song a colour of its own, or (null) back its automatic one. */
+  const recolorSong = (slot: Slot, color: string | null) =>
+    setVersions((v) => {
+      if (!v[slot]) return v;
+      const { color: _, ...song } = v[slot]!;
+      return setAt(v, slot, color ? { ...song, color } : song);
+    });
   const folderOf = (path: string) => path.replace(/\/[^/]*$/, "");
 
   /** Replace every lane with these songs, in order (1, 2, then new lanes), stopped at the start,
@@ -1616,23 +1625,34 @@ export default function App() {
     }
   };
 
-  // A track with a colourful cover takes its colour: its number's lane colour (and the darker chart
-  // variant) is repointed, so the lane, its button, meter and its columns/curves all follow.
+  // Colours go with the track, not its position: a lane's number (`--lane-N`, and the darker chart
+  // variant) is pointed at its song's colour, so the lane, its button, meter and its columns/curves
+  // all follow it when it's moved. That's the colour picked for the song, else its cover's when
+  // colourful, else its engine slot's hue (slots don't move with the lanes).
   // A song's own reference ("R3") takes its cover's colour too, else a neutral reference colour.
   const hidden = [...companions.filter((c): c is Slot => c !== null), ...(defaultSlot === null ? [] : [defaultSlot])];
+  const colorOf = (slot: Slot): { lane: string; series: string } => {
+    const own = (hidden.includes(slot) ? null : versions[slot]?.color) ?? tracks[slot]?.accent ?? (hidden.includes(slot) ? REFERENCE_COLOR : null);
+    return own
+      ? { lane: own, series: `color-mix(in srgb, ${own} 78%, #101216)` }
+      : { lane: `var(--hue-${slot + 1})`, series: `var(--series-hue-${slot + 1})` };
+  };
   const laneColors = Object.fromEntries(
     [...order, ...hidden].flatMap((slot) => {
-      const accent = tracks[slot]?.accent ?? (hidden.includes(slot) ? REFERENCE_COLOR : null);
-      if (!accent) return [];
       const n = labelOf(slot).toLowerCase();
+      const { lane, series } = colorOf(slot);
       return [
-        [`--lane-${n}`, accent],
-        [`--series-lane-${n}`, `color-mix(in srgb, ${accent} 78%, #101216)`],
+        [`--lane-${n}`, lane],
+        [`--series-lane-${n}`, series],
       ];
     }),
   ) as CSSProperties;
 
-  const pair: ComparedPair = { slots: pairSlots, labels: [labelOf(subject), labelOf(reference)] };
+  const pair: ComparedPair = {
+    slots: pairSlots,
+    labels: [labelOf(subject), labelOf(reference)],
+    colors: [colorOf(subject).lane, reference === NO_REFERENCE ? "" : colorOf(reference).lane],
+  };
   const loadedCount = order.filter((s) => tracks[s]).length;
   /** Sessions from before default references kept the reference in track 2: offered as the default
    *  while there's none and no song has references of its own. */
@@ -1804,6 +1824,7 @@ export default function App() {
       songLabel={songOf === null ? undefined : labelOf(songOf)}
       slot={slot}
       label={labelOf(slot)}
+      color={colorOf(slot).lane}
       index={order.indexOf(lane)}
       closing={fixed ? false : entering.includes(slot) || leaving.includes(slot)}
       reorder={fixed ? null : reorderMark(slot)}
@@ -2004,7 +2025,7 @@ export default function App() {
                 <span className="default-ref-text">
                   <strong>Default reference</strong> · every song without its own is compared with it. Drop a file here, or
                 </span>
-                <button onClick={defaultReferenceDialog}>Add…</button>
+                <SourceMenu label="Add" title="Add the default reference: from a file or the Library" onFile={defaultReferenceDialog} onLibrary={() => openLibraryFor({ kind: "default" })} />
                 {migrateLane !== null && (
                   <button
                     className="default-ref-move"
@@ -2041,12 +2062,16 @@ export default function App() {
             onAdd={() => addVersionDialog(versionsOpen)}
             onRemove={(i) => removeVersion(versionsOpen, i)}
             onRename={(name) => renameSong(versionsOpen, name)}
+            color={colorOf(versionsOpen).lane}
+            autoColor={tracks[versionsOpen]?.accent ?? `var(--hue-${versionsOpen + 1})`}
+            onColor={(color) => recolorSong(versionsOpen, color)}
             reference={companions[versionsOpen] !== null ? tracks[companions[versionsOpen]!] : null}
             referenceLoading={companions[versionsOpen] !== null && loading[companions[versionsOpen]!]}
             referenceDrop={referencesDrop}
             referenceSetAside={compareWith[versionsOpen] !== null}
             onReference={(i) => showReference(versionsOpen, i)}
             onAddReference={() => addReferenceDialog(versionsOpen)}
+            onLibraryReference={() => openLibraryFor({ kind: "ref", owner: versionsOpen })}
             onRemoveReference={(i) => removeReference(versionsOpen, i)}
             onClose={() => setVersionsOpen(null)}
           />

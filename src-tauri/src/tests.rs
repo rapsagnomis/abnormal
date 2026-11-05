@@ -1124,6 +1124,7 @@ fn sessions_round_trip() {
             references: vec![at(&album, "ref x.flac"), at(&album, "ref y.flac")],
             reference_front: 1,
             compare_default: true,
+            color: Some("#e05186".into()),
             ..Lane::default()
         },
         // Compared with lane 3, which becomes lane 2 once the empty lane is left out.

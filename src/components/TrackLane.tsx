@@ -14,6 +14,8 @@ interface Props {
   slot: Slot;
   /** The lane's number: where it sits, not its engine slot. */
   label: string;
+  /** Its colour (the CSS value `--lane-N` is pointed at): it goes with the track, not the number. */
+  color: string;
   /** Position in the lane list, for the number-key shortcut. */
   index: number;
   /** Collapsed: about to open, or closing. */
@@ -318,6 +320,7 @@ export function TrackLane(props: Props) {
         {track ? (
           <Waveform
             slot={slot}
+            color={props.color}
             peaks={track.peaks}
             song={props.song}
             duration={track.duration}

@@ -12,6 +12,8 @@ import { isFull, panView, zoomView } from "../lib/view";
 
 interface Props {
   slot: Slot;
+  /** The lane's colour: the canvas reads it from CSS when drawing, so a new one redraws it. */
+  color: string;
   peaks: Peaks;
   /** Changes with each new song in the lane; new peaks for the same song are another version of
    *  it, whose bars reshape in place rather than the waveform sweeping in. */
@@ -368,7 +370,7 @@ export function Waveform(props: Props) {
     step(start);
     // view.start/end rather than view: callers may pass a fresh object every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [peaks, duration, view.start, view.end, detail, overlay, size, display, specOverview, specDetail, playheadBar, selection?.start, selection?.end, props.gainDb, props.loudness]);
+  }, [peaks, duration, view.start, view.end, detail, overlay, size, display, specOverview, specDetail, playheadBar, selection?.start, selection?.end, props.gainDb, props.loudness, props.color]);
 
   // A new song sweeps in from the left (another version of it reshapes its bars instead).
   const sweptSong = useRef<number | null>(null);

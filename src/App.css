@@ -16,66 +16,217 @@
   --text: #e4e7ec;
   --text-dim: #8a93a1;
   --danger: #ef6b6b;
-  /* Lane colours by number; extra tracks use hues clear of 1’s cyan and 2’s orange. */
-  --lane-1: #3fc5d3;
-  --lane-2: #f1a24a;
-  --lane-3: #a48cf0;
-  --lane-4: #82cf6c;
-  --lane-5: #ea7aab;
-  --lane-6: #e2cb55;
-  --lane-7: #6b93f5;
-  --lane-8: #b5bfcc;
+  /* The lane palette: a track takes the hue of its engine slot (1 and 2 first), unless it has a
+     colour of its own (picked, or its cover’s); extra tracks use hues clear of 1’s cyan and 2’s orange. */
+  --hue-1: #3fc5d3;
+  --hue-2: #f1a24a;
+  --hue-3: #a48cf0;
+  --hue-4: #82cf6c;
+  --hue-5: #ea7aab;
+  --hue-6: #e2cb55;
+  --hue-7: #6b93f5;
+  --hue-8: #b5bfcc;
   /* I–Z: golden-angle hues, alternating lightness (26 tracks can't all be far apart). */
-  --lane-9: #e67487;
-  --lane-10: #51e063;
-  --lane-11: #a374e6;
-  --lane-12: #e0b651;
-  --lane-13: #74e6e6;
-  --lane-14: #e051b6;
-  --lane-15: #a3e674;
-  --lane-16: #5163e0;
-  --lane-17: #e68774;
-  --lane-18: #51e093;
-  --lane-19: #ca74e6;
-  --lane-20: #dae051;
-  --lane-21: #74c0e6;
-  --lane-22: #e05186;
-  --lane-23: #7de674;
-  --lane-24: #6f51e0;
-  --lane-25: #e6ad74;
-  --lane-26: #51e0c2;
+  --hue-9: #e67487;
+  --hue-10: #51e063;
+  --hue-11: #a374e6;
+  --hue-12: #e0b651;
+  --hue-13: #74e6e6;
+  --hue-14: #e051b6;
+  --hue-15: #a3e674;
+  --hue-16: #5163e0;
+  --hue-17: #e68774;
+  --hue-18: #51e093;
+  --hue-19: #ca74e6;
+  --hue-20: #dae051;
+  --hue-21: #74c0e6;
+  --hue-22: #e05186;
+  --hue-23: #7de674;
+  --hue-24: #6f51e0;
+  --hue-25: #e6ad74;
+  --hue-26: #51e0c2;
+  /* 27–50: the golden-angle hues go on, paler and deeper in turn, to stay clear of 9–26. */
+  --hue-27: #e89ce2;
+  --hue-28: #a0e133;
+  --hue-29: #9cb5e8;
+  --hue-30: #e1333a;
+  --hue-31: #9ce8af;
+  --hue-32: #9133e1;
+  --hue-33: #e8db9c;
+  --hue-34: #33cbe1;
+  --hue-35: #e89cc8;
+  --hue-36: #66e133;
+  --hue-37: #9c9ce8;
+  --hue-38: #e16633;
+  --hue-39: #9ce8c8;
+  --hue-40: #cb33e1;
+  --hue-41: #dbe89c;
+  --hue-42: #3391e1;
+  --hue-43: #e89caf;
+  --hue-44: #33e13a;
+  --hue-45: #b59ce8;
+  --hue-46: #e1a033;
+  --hue-47: #9ce8e2;
+  --hue-48: #e133bc;
+  --hue-49: #c2e89c;
+  --hue-50: #3357e1;
   /* The compared pair's colours: A and B here; the analysis panel points them at its pair. */
   --a: var(--lane-1);
   --b: var(--lane-2);
   --playhead: #ffffff;
   /* Chart marks: A/B hues stepped into the dark-mode band (OKLCH L 0.48–0.67), validated
      for CVD separation and contrast against --panel. */
-  --series-lane-1: #1fa3b0;
-  --series-lane-2: #cc7d26;
-  --series-lane-3: #8a6fe0;
-  --series-lane-4: #4fa83a;
-  --series-lane-5: #d1578d;
-  --series-lane-6: #b39a22;
-  --series-lane-7: #4f78e0;
-  --series-lane-8: #8d97a5;
-  --series-lane-9: #cf344e;
-  --series-lane-10: #29b13a;
-  --series-lane-11: #7534cf;
-  --series-lane-12: #b18a29;
-  --series-lane-13: #34cfcf;
-  --series-lane-14: #b12989;
-  --series-lane-15: #75cf34;
-  --series-lane-16: #293ab1;
-  --series-lane-17: #cf4e34;
-  --series-lane-18: #29b168;
-  --series-lane-19: #a834cf;
-  --series-lane-20: #abb129;
-  --series-lane-21: #349bcf;
-  --series-lane-22: #b1295c;
-  --series-lane-23: #41cf34;
-  --series-lane-24: #4629b1;
-  --series-lane-25: #cf8234;
-  --series-lane-26: #29b195;
+  --series-hue-1: #1fa3b0;
+  --series-hue-2: #cc7d26;
+  --series-hue-3: #8a6fe0;
+  --series-hue-4: #4fa83a;
+  --series-hue-5: #d1578d;
+  --series-hue-6: #b39a22;
+  --series-hue-7: #4f78e0;
+  --series-hue-8: #8d97a5;
+  --series-hue-9: #cf344e;
+  --series-hue-10: #29b13a;
+  --series-hue-11: #7534cf;
+  --series-hue-12: #b18a29;
+  --series-hue-13: #34cfcf;
+  --series-hue-14: #b12989;
+  --series-hue-15: #75cf34;
+  --series-hue-16: #293ab1;
+  --series-hue-17: #cf4e34;
+  --series-hue-18: #29b168;
+  --series-hue-19: #a834cf;
+  --series-hue-20: #abb129;
+  --series-hue-21: #349bcf;
+  --series-hue-22: #b1295c;
+  --series-hue-23: #41cf34;
+  --series-hue-24: #4629b1;
+  --series-hue-25: #cf8234;
+  --series-hue-26: #29b195;
+  --series-hue-27: #d058c6;
+  --series-hue-28: #6c9a1d;
+  --series-hue-29: #5880d0;
+  --series-hue-30: #9a1d23;
+  --series-hue-31: #58d076;
+  --series-hue-32: #611d9a;
+  --series-hue-33: #d0bc58;
+  --series-hue-34: #1d8b9a;
+  --series-hue-35: #d0589e;
+  --series-hue-36: #429a1d;
+  --series-hue-37: #5858d0;
+  --series-hue-38: #9a421d;
+  --series-hue-39: #58d09e;
+  --series-hue-40: #8b1d9a;
+  --series-hue-41: #bcd058;
+  --series-hue-42: #1d619a;
+  --series-hue-43: #d05876;
+  --series-hue-44: #1d9a23;
+  --series-hue-45: #8058d0;
+  --series-hue-46: #9a6c1d;
+  --series-hue-47: #58d0c6;
+  --series-hue-48: #9a1d80;
+  --series-hue-49: #94d058;
+  --series-hue-50: #1d379a;
+  /* Colours by lane number, pointed at each lane's track's colour by the app (these are fallbacks). */
+  --lane-1: var(--hue-1);
+  --series-lane-1: var(--series-hue-1);
+  --lane-2: var(--hue-2);
+  --series-lane-2: var(--series-hue-2);
+  --lane-3: var(--hue-3);
+  --series-lane-3: var(--series-hue-3);
+  --lane-4: var(--hue-4);
+  --series-lane-4: var(--series-hue-4);
+  --lane-5: var(--hue-5);
+  --series-lane-5: var(--series-hue-5);
+  --lane-6: var(--hue-6);
+  --series-lane-6: var(--series-hue-6);
+  --lane-7: var(--hue-7);
+  --series-lane-7: var(--series-hue-7);
+  --lane-8: var(--hue-8);
+  --series-lane-8: var(--series-hue-8);
+  --lane-9: var(--hue-9);
+  --series-lane-9: var(--series-hue-9);
+  --lane-10: var(--hue-10);
+  --series-lane-10: var(--series-hue-10);
+  --lane-11: var(--hue-11);
+  --series-lane-11: var(--series-hue-11);
+  --lane-12: var(--hue-12);
+  --series-lane-12: var(--series-hue-12);
+  --lane-13: var(--hue-13);
+  --series-lane-13: var(--series-hue-13);
+  --lane-14: var(--hue-14);
+  --series-lane-14: var(--series-hue-14);
+  --lane-15: var(--hue-15);
+  --series-lane-15: var(--series-hue-15);
+  --lane-16: var(--hue-16);
+  --series-lane-16: var(--series-hue-16);
+  --lane-17: var(--hue-17);
+  --series-lane-17: var(--series-hue-17);
+  --lane-18: var(--hue-18);
+  --series-lane-18: var(--series-hue-18);
+  --lane-19: var(--hue-19);
+  --series-lane-19: var(--series-hue-19);
+  --lane-20: var(--hue-20);
+  --series-lane-20: var(--series-hue-20);
+  --lane-21: var(--hue-21);
+  --series-lane-21: var(--series-hue-21);
+  --lane-22: var(--hue-22);
+  --series-lane-22: var(--series-hue-22);
+  --lane-23: var(--hue-23);
+  --series-lane-23: var(--series-hue-23);
+  --lane-24: var(--hue-24);
+  --series-lane-24: var(--series-hue-24);
+  --lane-25: var(--hue-25);
+  --series-lane-25: var(--series-hue-25);
+  --lane-26: var(--hue-26);
+  --series-lane-26: var(--series-hue-26);
+  --lane-27: var(--hue-27);
+  --series-lane-27: var(--series-hue-27);
+  --lane-28: var(--hue-28);
+  --series-lane-28: var(--series-hue-28);
+  --lane-29: var(--hue-29);
+  --series-lane-29: var(--series-hue-29);
+  --lane-30: var(--hue-30);
+  --series-lane-30: var(--series-hue-30);
+  --lane-31: var(--hue-31);
+  --series-lane-31: var(--series-hue-31);
+  --lane-32: var(--hue-32);
+  --series-lane-32: var(--series-hue-32);
+  --lane-33: var(--hue-33);
+  --series-lane-33: var(--series-hue-33);
+  --lane-34: var(--hue-34);
+  --series-lane-34: var(--series-hue-34);
+  --lane-35: var(--hue-35);
+  --series-lane-35: var(--series-hue-35);
+  --lane-36: var(--hue-36);
+  --series-lane-36: var(--series-hue-36);
+  --lane-37: var(--hue-37);
+  --series-lane-37: var(--series-hue-37);
+  --lane-38: var(--hue-38);
+  --series-lane-38: var(--series-hue-38);
+  --lane-39: var(--hue-39);
+  --series-lane-39: var(--series-hue-39);
+  --lane-40: var(--hue-40);
+  --series-lane-40: var(--series-hue-40);
+  --lane-41: var(--hue-41);
+  --series-lane-41: var(--series-hue-41);
+  --lane-42: var(--hue-42);
+  --series-lane-42: var(--series-hue-42);
+  --lane-43: var(--hue-43);
+  --series-lane-43: var(--series-hue-43);
+  --lane-44: var(--hue-44);
+  --series-lane-44: var(--series-hue-44);
+  --lane-45: var(--hue-45);
+  --series-lane-45: var(--series-hue-45);
+  --lane-46: var(--hue-46);
+  --series-lane-46: var(--series-hue-46);
+  --lane-47: var(--hue-47);
+  --series-lane-47: var(--series-hue-47);
+  --lane-48: var(--hue-48);
+  --series-lane-48: var(--series-hue-48);
+  --lane-49: var(--hue-49);
+  --series-lane-49: var(--series-hue-49);
+  --lane-50: var(--hue-50);
+  --series-lane-50: var(--series-hue-50);
   --series-a: var(--series-lane-1);
   --series-b: var(--series-lane-2);
   /* Single-series difference curves: neutral, so it never reads as A or B. */
@@ -442,6 +593,78 @@ button:focus-visible {
 }
 .lane.slot-26 {
   --accent: var(--lane-26);
+}
+.lane.slot-27 {
+  --accent: var(--lane-27);
+}
+.lane.slot-28 {
+  --accent: var(--lane-28);
+}
+.lane.slot-29 {
+  --accent: var(--lane-29);
+}
+.lane.slot-30 {
+  --accent: var(--lane-30);
+}
+.lane.slot-31 {
+  --accent: var(--lane-31);
+}
+.lane.slot-32 {
+  --accent: var(--lane-32);
+}
+.lane.slot-33 {
+  --accent: var(--lane-33);
+}
+.lane.slot-34 {
+  --accent: var(--lane-34);
+}
+.lane.slot-35 {
+  --accent: var(--lane-35);
+}
+.lane.slot-36 {
+  --accent: var(--lane-36);
+}
+.lane.slot-37 {
+  --accent: var(--lane-37);
+}
+.lane.slot-38 {
+  --accent: var(--lane-38);
+}
+.lane.slot-39 {
+  --accent: var(--lane-39);
+}
+.lane.slot-40 {
+  --accent: var(--lane-40);
+}
+.lane.slot-41 {
+  --accent: var(--lane-41);
+}
+.lane.slot-42 {
+  --accent: var(--lane-42);
+}
+.lane.slot-43 {
+  --accent: var(--lane-43);
+}
+.lane.slot-44 {
+  --accent: var(--lane-44);
+}
+.lane.slot-45 {
+  --accent: var(--lane-45);
+}
+.lane.slot-46 {
+  --accent: var(--lane-46);
+}
+.lane.slot-47 {
+  --accent: var(--lane-47);
+}
+.lane.slot-48 {
+  --accent: var(--lane-48);
+}
+.lane.slot-49 {
+  --accent: var(--lane-49);
+}
+.lane.slot-50 {
+  --accent: var(--lane-50);
 }
 .lane {
   transition: border-color 160ms ease, box-shadow 220ms ease, background-color 220ms ease, opacity 220ms ease;
@@ -1159,6 +1382,102 @@ body.dragging-volume * {
   --accent: var(--lane-26);
   color: var(--lane-26);
 }
+.ab-switch .slot-27 {
+  --accent: var(--lane-27);
+  color: var(--lane-27);
+}
+.ab-switch .slot-28 {
+  --accent: var(--lane-28);
+  color: var(--lane-28);
+}
+.ab-switch .slot-29 {
+  --accent: var(--lane-29);
+  color: var(--lane-29);
+}
+.ab-switch .slot-30 {
+  --accent: var(--lane-30);
+  color: var(--lane-30);
+}
+.ab-switch .slot-31 {
+  --accent: var(--lane-31);
+  color: var(--lane-31);
+}
+.ab-switch .slot-32 {
+  --accent: var(--lane-32);
+  color: var(--lane-32);
+}
+.ab-switch .slot-33 {
+  --accent: var(--lane-33);
+  color: var(--lane-33);
+}
+.ab-switch .slot-34 {
+  --accent: var(--lane-34);
+  color: var(--lane-34);
+}
+.ab-switch .slot-35 {
+  --accent: var(--lane-35);
+  color: var(--lane-35);
+}
+.ab-switch .slot-36 {
+  --accent: var(--lane-36);
+  color: var(--lane-36);
+}
+.ab-switch .slot-37 {
+  --accent: var(--lane-37);
+  color: var(--lane-37);
+}
+.ab-switch .slot-38 {
+  --accent: var(--lane-38);
+  color: var(--lane-38);
+}
+.ab-switch .slot-39 {
+  --accent: var(--lane-39);
+  color: var(--lane-39);
+}
+.ab-switch .slot-40 {
+  --accent: var(--lane-40);
+  color: var(--lane-40);
+}
+.ab-switch .slot-41 {
+  --accent: var(--lane-41);
+  color: var(--lane-41);
+}
+.ab-switch .slot-42 {
+  --accent: var(--lane-42);
+  color: var(--lane-42);
+}
+.ab-switch .slot-43 {
+  --accent: var(--lane-43);
+  color: var(--lane-43);
+}
+.ab-switch .slot-44 {
+  --accent: var(--lane-44);
+  color: var(--lane-44);
+}
+.ab-switch .slot-45 {
+  --accent: var(--lane-45);
+  color: var(--lane-45);
+}
+.ab-switch .slot-46 {
+  --accent: var(--lane-46);
+  color: var(--lane-46);
+}
+.ab-switch .slot-47 {
+  --accent: var(--lane-47);
+  color: var(--lane-47);
+}
+.ab-switch .slot-48 {
+  --accent: var(--lane-48);
+  color: var(--lane-48);
+}
+.ab-switch .slot-49 {
+  --accent: var(--lane-49);
+  color: var(--lane-49);
+}
+.ab-switch .slot-50 {
+  --accent: var(--lane-50);
+  color: var(--lane-50);
+}
 .slot-switch {
   position: relative;
   display: flex;
@@ -1549,7 +1868,13 @@ kbd {
   border-color: transparent;
   background: transparent;
 }
-.panel-close svg,
+.panel-close:hover {
+  color: var(--text);
+}
+.panel-close svg {
+  width: 16px;
+  height: 16px;
+}
 
 /* The library slides in over the lanes, against the analysis panel (400 px + the 10 px gap). */
 .library-drawer {
@@ -3100,6 +3425,106 @@ button.busy::after {
 .versions-name:focus::placeholder {
   opacity: 0.4;
 }
+/* The song's colour, next to its name: a swatch that shows the colour choices under the header. */
+.versions-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.versions-name-row .versions-name {
+  flex: 1;
+  min-width: 0;
+}
+.versions-color {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--panel);
+  background: var(--lane-color);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.versions-color:hover:not(:disabled),
+.versions-color.on {
+  border-color: var(--panel);
+  background: var(--lane-color);
+  box-shadow: 0 0 0 1.5px var(--text);
+}
+.versions-colors {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--panel-raised);
+}
+.versions-swatches {
+  display: grid;
+  grid-template-columns: repeat(13, 1fr);
+  gap: 6px;
+  justify-items: center;
+}
+.versions-swatch {
+  display: block;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--panel-raised);
+  box-shadow: 0 0 0 1px transparent;
+}
+button.versions-swatch:hover:not(:disabled) {
+  border-color: var(--panel-raised);
+  box-shadow: 0 0 0 1px var(--text-dim);
+}
+.versions-swatch.on,
+button.versions-swatch.on:hover:not(:disabled) {
+  box-shadow: 0 0 0 1.5px var(--text);
+}
+.versions-color-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.versions-auto,
+.versions-custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 4px;
+  font-size: 12px;
+}
+.versions-auto .versions-swatch {
+  width: 16px;
+  height: 16px;
+  border-width: 0;
+}
+.versions-auto.on {
+  border-color: var(--text);
+}
+.versions-custom {
+  position: relative;
+  padding-left: 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+.versions-custom:hover {
+  border-color: var(--text-dim);
+}
+/* The native picker opens from the whole label; its own control is hidden. */
+.versions-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
 .versions-list {
   display: flex;
   flex-direction: column;
@@ -3340,7 +3765,7 @@ button.busy::after {
   color: var(--text-dim);
   font-size: 12px;
 }
-.default-ref-empty button {
+.default-ref-empty > button {
   flex: none;
   padding: 3px 9px;
   font-size: 12px;

@@ -1,16 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 
-/** A playback slot: 0 = A (your track), 1 = B (the reference), 2–25 = extra tracks. */
+/** A playback slot: 0 and 1 = the first two lanes, 2–49 = extra lanes and hidden references. */
 export type Slot = number;
 /** A side of the compared pair: 0 = the track, 1 = the reference (any two slots, see `pair.ts`). */
 export type ABSlot = 0 | 1;
 export const SLOTS: ABSlot[] = [0, 1];
 /** Engine slots; keep in step with `SLOTS` in player.rs. */
-export const ALL_SLOTS: Slot[] = Array.from({ length: 26 }, (_, i) => i);
+/** Engine slots (`player::SLOTS` in Rust): the most tracks loaded at once, references included. */
+export const SLOT_COUNT = 50;
+export const ALL_SLOTS: Slot[] = Array.from({ length: SLOT_COUNT }, (_, i) => i);
 /** Engine slots the extra tracks can take. */
 export const EXTRA_SLOTS: Slot[] = ALL_SLOTS.slice(2);
-/** Labels in display order: the lanes' numbers, 1 to 26 (also the keys of their colours, `--lane-N`). */
-export const SLOT_LABELS: readonly string[] = Array.from({ length: 26 }, (_, i) => String(i + 1));
+/** Labels in display order: the lanes' numbers, 1 to 50 (also the keys of their colours, `--lane-N`). */
+export const SLOT_LABELS: readonly string[] = Array.from({ length: SLOT_COUNT }, (_, i) => String(i + 1));
 
 export interface Peaks {
   buckets: number;
@@ -250,6 +252,9 @@ export interface LaneVersions {
   compareLane?: number;
   /** In a saved session: compared with the session's default reference even though it has its own. */
   compareDefault?: boolean;
+  /** The colour picked for the song ("#rrggbb"); left out for its automatic one (its cover's, else
+   *  its engine slot's hue), so it keeps its colour wherever its lane is moved. */
+  color?: string;
 }
 
 /** Saved lanes, in order (`sessions.rs`). */

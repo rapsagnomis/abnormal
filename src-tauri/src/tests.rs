@@ -998,7 +998,7 @@ fn library_real_folder() {
     use crate::library::Library;
     let Some(root) = std::env::var_os("SONIC_LIBRARY_DIR") else { return };
     let db = std::env::temp_dir().join(format!("sonic-library-test-{}.json", std::process::id()));
-    let lib = Library::new(PathBuf::from(&root), db.clone());
+    let lib = Library::new(Some(PathBuf::from(&root)), db.clone());
     let t = std::time::Instant::now();
     lib.index(&|_| {});
     let status = lib.status();
@@ -1011,7 +1011,7 @@ fn library_real_folder() {
     assert_eq!(lib.status().queued, 0);
 
     // Reloading from disk keeps everything, and a track's best match is itself.
-    let lib = Library::new(PathBuf::from(&root), db.clone());
+    let lib = Library::new(Some(PathBuf::from(&root)), db.clone());
     assert_eq!(lib.status().indexed, status.indexed);
     let first = lib.similar(&crate::similarity::Features { tonal: vec![], dynamics: vec![], stereo: vec![] }, &[], [1.0; 3], 1);
     assert!(first.is_empty(), "no shared values means no match");
@@ -1051,7 +1051,7 @@ fn deemix_search() {
     let Some(query) = std::env::var_os("SONIC_DEEMIX_SEARCH") else { return };
     let dir = std::env::temp_dir().join("abnormal-deemix-test");
     let home = PathBuf::from(std::env::var_os("HOME").unwrap());
-    let deemix = crate::deemix::Deemix::new(&home, dir.join("data"), dir.join("music"));
+    let deemix = crate::deemix::Deemix::new(&home, dir.join("data"), Some(dir.join("music")));
     let status = deemix.connect().unwrap();
     println!("{status:?}");
     assert!(status.installed);
@@ -1316,6 +1316,25 @@ mod bundle {
         let item = |name: &str| BundleItem { source: String::new(), name: name.into(), title: String::new() };
         let names = archive_names(&[item("01 - A/B: mix"), item("Song"), item("song"), item("  ")], Format::Flac);
         assert_eq!(names, ["01 - A_B_ mix.flac", "Song.flac", "song (2).flac", "Untitled.flac"]);
+    }
+
+    /// MP3 can't carry 96 or 88.2 kHz: such sources are resampled (to 48 and 44.1 kHz), keeping
+    /// their length and level; rates MP3 takes are left alone.
+    #[test]
+    fn high_resolution_mp3_is_resampled() {
+        use crate::bundle::resampled_for_mp3;
+        for (rate, expected) in [(96_000u32, 48_000u32), (88_200, 44_100)] {
+            let sine: Vec<f32> = (0..rate).map(|i| (0.5 * (2.0 * PI * 1000.0 * i as f64 / rate as f64).sin()) as f32).collect();
+            let audio = AudioData { sample_rate: rate, channels: vec![sine.clone(), sine.clone(), sine] };
+            let out = resampled_for_mp3(&audio).unwrap().unwrap();
+            assert_eq!((out.sample_rate, out.channels.len()), (expected, 2));
+            assert!((out.frames() as i64 - expected as i64).abs() < 64, "{} frames", out.frames());
+            let mid = &out.channels[0][out.frames() / 4..out.frames() * 3 / 4];
+            let peak = mid.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!((peak - 0.5).abs() < 0.01, "peak {peak}");
+        }
+        let cd = AudioData { sample_rate: 44_100, channels: vec![vec![0.0; 100]] };
+        assert!(resampled_for_mp3(&cd).unwrap().is_none());
     }
 
     /// Two sine tracks zipped in each format: both come back, decodable, at about the same

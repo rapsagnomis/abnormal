@@ -8,6 +8,9 @@
 //!
 //! The server runs in single-user mode: the ARL pasted once is saved by Deemix in our data
 //! folder, and handed back by `/api/connect` for auto-login on later starts. We never write it.
+//!
+//! Deemix is looked for where its installers put it on macOS and Windows (see `Install`). Builds
+//! without the `deezer` Cargo feature leave all of this out: Deezer is then reported unavailable.
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -18,11 +21,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{json, Value};
 
-const APP: &str = "/Applications/deemix-gui.app";
-const BINARY: &str = "Contents/MacOS/deemix-gui";
-const SERVER_JS: &str = "Contents/Resources/app.asar/server/dist/app.js";
-/// The Deemix GUI's settings, copied into our server's data folder on start.
-const GUI_CONFIG: &str = "Library/Application Support/deemix/config.json";
+/// The server script inside the app's resources folder.
+const SERVER_JS: &str = "app.asar/server/dist/app.js";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 /// Deemix's code for FLAC.
 const FLAC: u32 = 9;
@@ -30,7 +30,11 @@ const FLAC: u32 = 9;
 #[derive(Serialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
+    /// This build includes Deezer downloads (the `deezer` feature).
+    pub available: bool,
     pub installed: bool,
+    /// Where Deemix is looked for, to say so when it isn't there.
+    pub location: Option<String>,
     pub logged_in: bool,
     /// Deezer account name once logged in.
     pub user: Option<String>,
@@ -101,27 +105,89 @@ impl Drop for Server {
     }
 }
 
-pub struct Deemix {
-    app: PathBuf,
-    data_dir: PathBuf,
-    music_dir: PathBuf,
+/// Where the Deemix desktop app is: its Electron binary, its resources folder (holding the
+/// server) and the GUI's own settings, as its installers lay them out.
+struct Install {
+    binary: PathBuf,
+    resources: PathBuf,
     gui_config: PathBuf,
+}
+
+impl Install {
+    #[cfg(target_os = "macos")]
+    fn locate(home: &Path) -> Option<Install> {
+        let gui_config = home.join("Library/Application Support/deemix/config.json");
+        let at = |apps: PathBuf| {
+            let app = apps.join("deemix-gui.app");
+            Install { binary: app.join("Contents/MacOS/deemix-gui"), resources: app.join("Contents/Resources"), gui_config: gui_config.clone() }
+        };
+        // The system Applications folder, else the user's own; reported at the first when in neither.
+        let system = at(PathBuf::from("/Applications"));
+        let user = at(home.join("Applications"));
+        Some(if !system.binary.is_file() && user.binary.is_file() { user } else { system })
+    }
+
+    /// The NSIS installer puts it in the user's programs folder (unverified on a real machine).
+    #[cfg(windows)]
+    fn locate(home: &Path) -> Option<Install> {
+        let local = std::env::var_os("LOCALAPPDATA").map_or_else(|| home.join("AppData/Local"), PathBuf::from);
+        let roaming = std::env::var_os("APPDATA").map_or_else(|| home.join("AppData/Roaming"), PathBuf::from);
+        let app = local.join("Programs").join("deemix-gui");
+        Some(Install { binary: app.join("deemix-gui.exe"), resources: app.join("resources"), gui_config: roaming.join("deemix").join("config.json") })
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    fn locate(_home: &Path) -> Option<Install> {
+        None
+    }
+
+    fn server_js(&self) -> PathBuf {
+        self.resources.join(SERVER_JS)
+    }
+
+    fn installed(&self) -> bool {
+        cfg!(feature = "deezer") && self.binary.is_file()
+    }
+}
+
+pub struct Deemix {
+    install: Option<Install>,
+    data_dir: PathBuf,
+    /// Where downloads go: the library folder (None until one is chosen).
+    music_dir: Mutex<Option<PathBuf>>,
     server: Mutex<Option<Server>>,
 }
 
 impl Deemix {
-    pub fn new(home: &Path, data_dir: PathBuf, music_dir: PathBuf) -> Self {
-        Deemix { app: PathBuf::from(APP), data_dir, music_dir, gui_config: home.join(GUI_CONFIG), server: Mutex::new(None) }
+    pub fn new(home: &Path, data_dir: PathBuf, music_dir: Option<PathBuf>) -> Self {
+        Deemix { install: Install::locate(home), data_dir, music_dir: Mutex::new(music_dir), server: Mutex::new(None) }
     }
 
     fn installed(&self) -> bool {
-        self.app.join(BINARY).is_file()
+        self.install.as_ref().is_some_and(Install::installed)
+    }
+
+    /// Download into another folder from now on. A running server is stopped (it was started
+    /// with the old one) and starts again on next use.
+    pub fn set_music_dir(&self, dir: PathBuf) {
+        *self.music_dir.lock().unwrap() = Some(dir);
+        *self.server.lock().unwrap() = None;
+    }
+
+    /// What's known before starting anything: whether Deezer can be used at all.
+    fn base_status(&self) -> Status {
+        Status {
+            available: cfg!(feature = "deezer"),
+            installed: self.installed(),
+            location: self.install.as_ref().map(|i| i.binary.display().to_string()),
+            ..Status::default()
+        }
     }
 
     /// Start the server if needed and log in with the saved ARL if there is one.
     pub fn connect(&self) -> Result<Status, String> {
         if !self.installed() {
-            return Ok(Status::default());
+            return Ok(self.base_status());
         }
         let mut guard = self.server.lock().unwrap();
         let server = self.running(&mut guard)?;
@@ -135,7 +201,7 @@ impl Deemix {
                 // A rejected saved ARL just leaves us logged out; the user can paste a new one.
                 let _ = login(server, arl);
             } else if !connect["autologin"].as_bool().unwrap_or(true) {
-                server.status = logged_in_status(&connect["currentUser"]);
+                server.status = logged_in_status(&connect["currentUser"], &server.status);
             }
         }
         Ok(server.status.clone())
@@ -234,8 +300,12 @@ impl Deemix {
 
     /// The running server, started (or restarted, if it died) as needed.
     fn running<'a>(&self, guard: &'a mut Option<Server>) -> Result<&'a mut Server, String> {
+        if !cfg!(feature = "deezer") {
+            return Err("This build doesn't include Deezer downloads".into());
+        }
         if !self.installed() {
-            return Err(format!("Deemix not found at {APP}"));
+            let at = self.install.as_ref().map(|i| format!(" at {}", i.binary.display())).unwrap_or_default();
+            return Err(format!("Deemix not found{at}"));
         }
         if guard.as_mut().is_some_and(|s| s.child.try_wait().ok().flatten().is_some()) {
             *guard = None;
@@ -247,26 +317,28 @@ impl Deemix {
     }
 
     fn start(&self) -> Result<Server, String> {
+        let install = self.install.as_ref().ok_or("Deemix not found")?;
+        let music_dir = self.music_dir.lock().unwrap().clone().ok_or("Choose a library folder first: downloads go there")?;
         std::fs::create_dir_all(&self.data_dir).map_err(|e| format!("cannot create {}: {e}", self.data_dir.display()))?;
         self.kill_stale_server();
-        self.sync_config()?;
+        self.sync_config(install, &music_dir)?;
         let port = TcpListener::bind("127.0.0.1:0")
             .and_then(|l| l.local_addr())
             .map_err(|e| format!("no free local port: {e}"))?
             .port();
-        // Deemix appends file names straight onto these, so they need the trailing slash.
-        let dir_arg = |p: &Path| format!("{}/", p.display());
+        // Deemix appends file names straight onto these, so they need the trailing separator.
+        let dir_arg = |p: &Path| format!("{}{}", p.display(), std::path::MAIN_SEPARATOR);
         let log_path = self.data_dir.join("server.log");
         let log = std::fs::File::create(&log_path).map_err(|e| format!("cannot write {}: {e}", log_path.display()))?;
-        let child = Command::new(self.app.join(BINARY))
-            .arg(self.app.join(SERVER_JS))
+        let child = background(Command::new(&install.binary))
+            .arg(install.server_js())
             .args(["--host", "127.0.0.1", "--port", &port.to_string(), "--singleuser"])
             .env("ELECTRON_RUN_AS_NODE", "1")
             // Deemix ignores `--singleuser` (it reads `!!env ?? flag`, which never falls through),
             // so single-user mode, and with it the saved ARL, is switched on by this variable.
             .env("DEEMIX_SINGLE_USER", "1")
             .env("DEEMIX_DATA_DIR", dir_arg(&self.data_dir))
-            .env("DEEMIX_MUSIC_DIR", dir_arg(&self.music_dir))
+            .env("DEEMIX_MUSIC_DIR", dir_arg(&music_dir))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log)
@@ -275,8 +347,7 @@ impl Deemix {
         let _ = std::fs::write(self.pid_file(), child.id().to_string());
 
         let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(60)).build();
-        let mut server = Server { child, base: format!("http://127.0.0.1:{port}/api/"), agent, status: Status::default() };
-        server.status.installed = true;
+        let mut server = Server { child, base: format!("http://127.0.0.1:{port}/api/"), agent, status: self.base_status() };
         let started = Instant::now();
         loop {
             if get(&server, "getSettings", &[]).is_ok() {
@@ -295,14 +366,14 @@ impl Deemix {
     }
 
     /// Copy the GUI's settings (or keep ours if it has none) with downloads aimed at the library.
-    fn sync_config(&self) -> Result<(), String> {
+    fn sync_config(&self, install: &Install, music_dir: &Path) -> Result<(), String> {
         let ours = self.data_dir.join("config.json");
         let read = |p: &Path| std::fs::read(p).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).filter(Value::is_object);
-        let Some(mut config) = read(&self.gui_config).or_else(|| read(&ours)) else {
+        let Some(mut config) = read(&install.gui_config).or_else(|| read(&ours)) else {
             // No settings anywhere: Deemix writes its defaults, using DEEMIX_MUSIC_DIR as the folder.
             return Ok(());
         };
-        config["downloadLocation"] = json!(self.music_dir.to_string_lossy());
+        config["downloadLocation"] = json!(music_dir.to_string_lossy());
         let bytes = serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?;
         std::fs::write(&ours, bytes).map_err(|e| format!("cannot write {}: {e}", ours.display()))
     }
@@ -314,11 +385,39 @@ impl Deemix {
     /// A server left running by a crashed previous session would keep downloading on its own.
     fn kill_stale_server(&self) {
         let Some(pid) = std::fs::read_to_string(self.pid_file()).ok().and_then(|s| s.trim().parse::<u32>().ok()) else { return };
-        let command = Command::new("ps").args(["-p", &pid.to_string(), "-o", "command="]).output();
-        if command.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(SERVER_JS)) {
-            let _ = Command::new("kill").arg(pid.to_string()).status();
+        // Only if that process is still our server (the pid may have been reused since).
+        #[cfg(unix)]
+        {
+            let command = Command::new("ps").args(["-p", &pid.to_string(), "-o", "command="]).output();
+            if command.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(SERVER_JS)) {
+                let _ = Command::new("kill").arg(pid.to_string()).status();
+            }
+        }
+        // `tasklist` doesn't show command lines: the Deemix binary is close enough (the GUI itself
+        // isn't started with our pid file).
+        #[cfg(windows)]
+        {
+            let filter = format!("PID eq {pid}");
+            let command = background(Command::new("tasklist")).args(["/FI", &filter, "/FO", "CSV", "/NH"]).output();
+            if command.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).to_ascii_lowercase().contains("deemix-gui.exe")) {
+                let _ = background(Command::new("taskkill")).args(["/PID", &pid.to_string(), "/F"]).status();
+            }
         }
     }
+}
+
+/// A command run without a console window popping up.
+#[cfg(windows)]
+fn background(mut command: Command) -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(not(windows))]
+fn background(command: Command) -> Command {
+    command
 }
 
 fn login(server: &mut Server, arl: &str) -> Result<(), String> {
@@ -328,7 +427,7 @@ fn login(server: &mut Server, arl: &str) -> Result<(), String> {
     let reply = post(server, "loginArl", json!({ "arl": arl }))?;
     match reply["status"].as_i64() {
         Some(1..=3) => {
-            server.status = logged_in_status(&reply["user"]);
+            server.status = logged_in_status(&reply["user"], &server.status);
             Ok(())
         }
         Some(-1) => Err("Deezer is not reachable".into()),
@@ -336,9 +435,11 @@ fn login(server: &mut Server, arl: &str) -> Result<(), String> {
     }
 }
 
-fn logged_in_status(user: &Value) -> Status {
+fn logged_in_status(user: &Value, before: &Status) -> Status {
     Status {
+        available: before.available,
         installed: true,
+        location: before.location.clone(),
         logged_in: true,
         user: user["name"].as_str().map(str::to_owned),
         lossless: user["can_stream_lossless"].as_bool().unwrap_or(true),

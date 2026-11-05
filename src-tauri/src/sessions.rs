@@ -27,7 +27,8 @@ const MAX_RECENT: usize = 10;
 #[derive(Serialize, Deserialize)]
 struct SessionTrack {
     path: String,
-    /// From the session file's folder, when the track is under it.
+    /// From the session file's folder, when the track is under it; `/`-separated, so a session
+    /// saved on one system finds its files on another.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relative: Option<String>,
     /// macOS bookmark (base64): follows the file through renames and moves on its volume.
@@ -162,7 +163,7 @@ pub fn write(path: &Path, lanes: &[Lane], default_reference: Option<&str>) -> Re
         .collect();
     let track = |t: &String| SessionTrack {
         path: t.clone(),
-        relative: Path::new(t).strip_prefix(dir).ok().map(|r| r.to_string_lossy().into_owned()),
+        relative: Path::new(t).strip_prefix(dir).ok().map(portable),
         bookmark: relink::bookmark(Path::new(t)),
         identity: relink::identity(Path::new(t)),
     };
@@ -195,6 +196,11 @@ pub fn write(path: &Path, lanes: &[Lane], default_reference: Option<&str>) -> Re
         default_reference: default_reference.map(str::to_owned),
         relinked: Vec::new(),
     })
+}
+
+/// A relative path with `/` separators (Windows accepts them too).
+fn portable(relative: &Path) -> String {
+    relative.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
 /// Where a saved file is now: at its path; else relative to the session (the folder was moved);

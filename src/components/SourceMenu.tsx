@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { withMod } from "../lib/platform";
 import { Chevron } from "./Chevron";
 
 const MENU_WIDTH = 190;
@@ -79,10 +80,10 @@ export function SourceMenu(p: Props) {
             <FileIcon />
             <span className="load-menu-name">From File…</span>
           </button>
-          <button role="menuitem" onClick={() => pick(p.onLibrary)} title="Open the Library (⌘K) to load a track from it">
+          <button role="menuitem" onClick={() => pick(p.onLibrary)} title={`Open the Library (${withMod("K")}) to load a track from it`}>
             <LibraryIcon />
             <span className="load-menu-name">From Library</span>
-            <kbd className="source-menu-key">⌘K</kbd>
+            <kbd className="source-menu-key">{withMod("K")}</kbd>
           </button>
         </div>
       )}

@@ -1,5 +1,6 @@
-//! Music library index: every audio file under a root folder is analysed once and its sonic
-//! fingerprint kept in a JSON database, so loaded tracks can be matched against the library.
+//! Music library index: every audio file under a root folder (chosen by the user, see
+//! `settings.rs`) is analysed once and its sonic fingerprint kept in a JSON database, so loaded
+//! tracks can be matched against the library.
 //!
 //! Indexing runs in the background at startup and only analyses files that are new or changed
 //! since the last run (by size and modification time); entries for deleted files are dropped.
@@ -17,7 +18,7 @@ use crate::similarity::{self, Features, Spread};
 
 /// Bump when `Features` or the analysis behind them change, to re-analyse the whole library.
 const DB_VERSION: u32 = 1;
-const EXTENSIONS: [&str; 8] = ["mp3", "flac", "wav", "aif", "aiff", "aifc", "m4a", "aac"];
+pub const EXTENSIONS: [&str; 9] = ["mp3", "flac", "wav", "wave", "aif", "aiff", "aifc", "m4a", "aac"];
 /// Decoded tracks are held in memory while analysed (~100 MB for 5 min of 44.1 kHz stereo), so
 /// the number of parallel workers is capped.
 const MAX_WORKERS: usize = 4;
@@ -72,6 +73,7 @@ struct Db {
 #[derive(Serialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
+    /// The library folder; empty while none is chosen.
     pub root: String,
     /// Tracks in the database with a fingerprint.
     pub indexed: usize,
@@ -88,7 +90,7 @@ pub struct Status {
 #[serde(rename_all = "camelCase")]
 pub struct LibraryTrack {
     pub path: String,
-    /// Path relative to the library root.
+    /// Path relative to the library root, with `/` separators on every platform.
     pub rel_path: String,
     pub duration: f64,
     pub summary: Option<Summary>,
@@ -129,7 +131,8 @@ pub struct Match {
 pub type Notify<'a> = &'a (dyn Fn(&Status) + Sync);
 
 pub struct Library {
-    root: PathBuf,
+    /// The folder indexed; None until one is chosen.
+    root: Mutex<Option<PathBuf>>,
     db_path: PathBuf,
     /// Album art thumbnails, named by a hash of the original image so an album's share one.
     covers_dir: PathBuf,
@@ -138,21 +141,31 @@ pub struct Library {
 }
 
 impl Library {
-    pub fn new(root: PathBuf, db_path: PathBuf) -> Self {
+    pub fn new(root: Option<PathBuf>, db_path: PathBuf) -> Self {
         let db = std::fs::read(&db_path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Db>(&bytes).ok())
             .filter(|db| db.version == DB_VERSION)
             .unwrap_or(Db { version: DB_VERSION, tracks: HashMap::new() });
-        let status = Status { root: root.to_string_lossy().into_owned(), ..Default::default() };
+        let status = Status { root: root_string(root.as_deref()), ..Default::default() };
         let covers_dir = db_path.with_file_name("covers");
-        let lib = Library { root, db_path, covers_dir, db: Mutex::new(db), status: Mutex::new(status) };
+        let lib = Library { root: Mutex::new(root), db_path, covers_dir, db: Mutex::new(db), status: Mutex::new(status) };
         lib.refresh_counts();
         lib
     }
 
     pub fn status(&self) -> Status {
         self.status.lock().unwrap().clone()
+    }
+
+    pub fn root(&self) -> Option<PathBuf> {
+        self.root.lock().unwrap().clone()
+    }
+
+    /// Index another folder from now on (the next `index` drops what isn't under it).
+    pub fn set_root(&self, root: PathBuf) {
+        self.status.lock().unwrap().root = root_string(Some(&root));
+        *self.root.lock().unwrap() = Some(root);
     }
 
     #[cfg(test)]
@@ -195,11 +208,14 @@ impl Library {
     }
 
     fn run_index(&self, notify: Notify) -> Result<(), String> {
-        if !self.root.is_dir() {
-            return Err(format!("{} not found", self.root.display()));
+        // Nothing chosen yet, or the folder is gone (a disconnected drive): the index is kept as
+        // it is, so its tracks come back with the folder.
+        let Some(root) = self.root() else { return Ok(()) };
+        if !root.is_dir() {
+            return Err(format!("{} not found", root.display()));
         }
         let mut files = Vec::new();
-        collect_audio_files(&self.root, &mut files);
+        collect_audio_files(&root, &mut files);
 
         let todo: Vec<(PathBuf, u64, u64)> = {
             // Drop entries for files that are gone or changed; whatever is missing then gets analysed.
@@ -320,6 +336,7 @@ impl Library {
     /// Copies of the `exclude`d files are left out too. `weights` balance tonal, dynamics and
     /// stereo distances.
     pub fn similar(&self, features: &Features, exclude: &[String], weights: [f64; 3], limit: usize) -> Vec<Match> {
+        let root = self.root();
         let db = self.db.lock().unwrap();
         let copies = copies(&db);
         let excluded: HashSet<u64> = exclude.iter().filter_map(|p| Some(db.tracks.get(p)?.features.as_ref()?.identity())).collect();
@@ -344,7 +361,7 @@ impl Library {
             .into_iter()
             .filter(|(_, e, ..)| seen.insert(e.features.as_ref().unwrap().identity()))
             .take(limit)
-            .map(|(path, e, score, [tonal, dynamics, stereo])| Match { track: self.track(path, e, &copies), score, tonal, dynamics, stereo })
+            .map(|(path, e, score, [tonal, dynamics, stereo])| Match { track: self.track(path, e, &copies, root.as_deref()), score, tonal, dynamics, stereo })
             .collect()
     }
 
@@ -378,13 +395,14 @@ impl Library {
     /// sorted by path, one per song: of several copies, the first matching one is listed.
     pub fn search(&self, query: &str, limit: usize) -> Vec<LibraryTrack> {
         let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        let root = self.root();
         let db = self.db.lock().unwrap();
         let copies = copies(&db);
         let mut found: Vec<(&String, &Entry, String)> = db
             .tracks
             .iter()
             .filter(|(_, e)| e.features.is_some())
-            .map(|(path, e)| (path, e, self.rel_path(path)))
+            .map(|(path, e)| (path, e, self.rel_path(path, root.as_deref())))
             .filter(|(_, e, rel)| {
                 // Match the path and the tags, so "artist title" finds files named otherwise.
                 let mut text = rel.to_lowercase();
@@ -403,17 +421,18 @@ impl Library {
             .into_iter()
             .filter(|(_, e, _)| seen.insert(e.features.as_ref().unwrap().identity()))
             .take(limit)
-            .map(|(path, e, _)| self.track(path, e, &copies))
+            .map(|(path, e, _)| self.track(path, e, &copies, root.as_deref()))
             .collect()
     }
 
-    fn rel_path(&self, path: &str) -> String {
-        Path::new(path)
-            .strip_prefix(&self.root)
-            .map_or_else(|_| path.to_owned(), |p| p.to_string_lossy().into_owned())
+    fn rel_path(&self, path: &str, root: Option<&Path>) -> String {
+        match root.and_then(|r| Path::new(path).strip_prefix(r).ok()) {
+            Some(rel) => rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"),
+            None => path.to_owned(),
+        }
     }
 
-    fn track(&self, path: &str, e: &Entry, copies: &HashMap<u64, Vec<&str>>) -> LibraryTrack {
+    fn track(&self, path: &str, e: &Entry, copies: &HashMap<u64, Vec<&str>>, root: Option<&Path>) -> LibraryTrack {
         let others = e
             .features
             .as_ref()
@@ -421,7 +440,7 @@ impl Library {
             .map_or_else(Vec::new, |group| group.iter().filter(|p| **p != path).map(|p| (*p).to_owned()).collect());
         let meta = e.meta.clone().unwrap_or_default();
         LibraryTrack {
-            rel_path: self.rel_path(path),
+            rel_path: self.rel_path(path, root),
             path: path.to_owned(),
             duration: e.duration,
             summary: e.summary.clone(),
@@ -432,6 +451,10 @@ impl Library {
             copies: others,
         }
     }
+}
+
+fn root_string(root: Option<&Path>) -> String {
+    root.map(|r| r.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 /// Paths of analysed files grouped by identical audio, sorted; only groups of two or more.

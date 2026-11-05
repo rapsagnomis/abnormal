@@ -60,6 +60,9 @@ export function DeezerResults({ query }: Props) {
       .finally(() => setPending((p) => p.filter((k) => k !== key)));
   };
 
+  // A build without Deezer downloads: nothing to show.
+  if (status && !status.available) return null;
+
   return (
     <section className="deezer">
       <h3 className="results-heading">
@@ -76,7 +79,9 @@ export function DeezerResults({ query }: Props) {
       {status === null ? (
         !error && <p className="chart-note">Starting Deemix…</p>
       ) : !status.installed ? (
-        <p className="chart-note">Install Deemix in /Applications to search Deezer and download reference tracks.</p>
+        <p className="chart-note">
+          Install Deemix{status.location ? ` (looked for at ${status.location})` : ""} to search Deezer and download reference tracks.
+        </p>
       ) : (
         <>
           {!status.loggedIn && <Login onStatus={setStatus} />}

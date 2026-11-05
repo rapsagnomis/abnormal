@@ -6,6 +6,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import type { CoverPreview, ZipFormat, ZipItem } from "../lib/api";
+import { basename } from "../lib/paths";
+import { isMac } from "../lib/platform";
 import { Glide } from "./Glide";
 
 /** A lane that can go into the zip: its song's version in front. */
@@ -67,7 +69,7 @@ const fieldKeys = (e: ReactKeyboardEvent<HTMLInputElement>) => {
   if (e.key === "Enter") e.currentTarget.blur();
 };
 
-const stem = (path: string) => (path.split("/").pop() ?? path).replace(/\.[^.]+$/, "");
+const stem = (path: string) => basename(path).replace(/\.[^.]+$/, "");
 
 interface Props {
   /** The panel is shown (opened from the app menu). */
@@ -292,10 +294,10 @@ export function ZipExport({ open, onClose, tracks, onExport }: Props) {
           {status?.saved ? (
             <div className="export-status export-saved">
               <span>
-                <span className="export-check">✓</span>Saved {status.saved.split("/").pop()}
+                <span className="export-check">✓</span>Saved {basename(status.saved)}
               </span>
               <span className="chart-note">{status.text}</span>
-              <button onClick={() => revealItemInDir(status.saved!).catch(() => {})}>Reveal in Finder</button>
+              <button onClick={() => revealItemInDir(status.saved!).catch(() => {})}>{isMac ? "Reveal in Finder" : "Show in folder"}</button>
             </div>
           ) : (
             status && <div className={`export-status${status.error ? " error" : ""}`}>{status.text}</div>

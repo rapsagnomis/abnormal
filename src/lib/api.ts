@@ -280,8 +280,12 @@ export interface RecentSession {
 
 /** Headless Deemix (Deezer search and downloads) state. */
 export interface DeezerStatus {
-  /** Deemix is in /Applications. */
+  /** This build includes Deezer downloads. */
+  available: boolean;
+  /** Deemix is installed (at `location`). */
   installed: boolean;
+  /** Where Deemix is looked for. */
+  location: string | null;
   loggedIn: boolean;
   user: string | null;
   /** The account can download FLAC. */
@@ -411,7 +415,8 @@ export const SPECTROGRAM_HZ = [30, 20000] as const;
 /** Spectrogram bytes map linearly from this level (0) to 0 dB (255). */
 export const SPECTROGRAM_FLOOR_DB = -120;
 
-export const AUDIO_EXTENSIONS = ["mp3", "flac", "wav", "aif", "aiff", "aifc", "m4a", "aac"];
+/** As `library::EXTENSIONS` in Rust. */
+export const AUDIO_EXTENSIONS = ["mp3", "flac", "wav", "wave", "aif", "aiff", "aifc", "m4a", "aac"];
 
 export const isAudioFile = (path: string) =>
   AUDIO_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
@@ -422,7 +427,7 @@ export const isSessionFile = (path: string) => path.split(".").pop()?.toLowerCas
 
 export const api = {
   audioStatus: () => invoke<AudioStatus>("audio_status"),
-  /** Files opened from Finder since the last call. */
+  /** Files opened from Finder or Explorer since the last call. */
   takeOpenedFiles: () => invoke<string[]>("take_opened_files"),
   /** Load a file into a slot, playing from `at` seconds (a prepared version swaps in at once). */
   loadTrack: (slot: Slot, path: string, at: number | null = null) => invoke<TrackInfo>("load_track", { slot, path, at }),
@@ -491,6 +496,8 @@ export const api = {
   proQTemplate: () => invoke<string | null>("pro_q_template"),
   libraryStatus: () => invoke<LibraryStatus>("library_status"),
   rescanLibrary: () => invoke<void>("rescan_library"),
+  /** Make `path` the library folder (and where Deezer downloads go), and index it. */
+  setLibraryFolder: (path: string) => invoke<LibraryStatus>("set_library_folder", { path }),
   /** Percentiles of the given tracks within the library; `near` limits it to the closest tracks. */
   libraryStanding: (tracks: ({ features: Features; integrated: number | null } | null)[], near: number | null) =>
     invoke<LibraryStanding[]>("library_standing", { tracks, near }),

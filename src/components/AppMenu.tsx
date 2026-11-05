@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import type { RecentSession } from "../lib/api";
 import { Chevron } from "./Chevron";
 import { flash } from "../lib/motion";
+import { withMod } from "../lib/platform";
 
 /** Saved: a green ring out of the button. */
 const SAVED_RING: Keyframe[] = [
@@ -109,19 +110,19 @@ export function AppMenu(p: Props) {
         <div ref={menu} className="load-menu session-menu" role="menu" style={pos}>
           <button role="menuitem" onClick={() => pick(p.onNew)} title={name ? `Save “${name}”, then start with empty tracks` : "Start with empty tracks"}>
             <span className="load-menu-name">New session</span>
-            <kbd>⌘N</kbd>
+            <kbd>{withMod("N")}</kbd>
           </button>
           <button role="menuitem" onClick={() => pick(p.onOpen)}>
             <span className="load-menu-name">Open session…</span>
-            <kbd>⌘O</kbd>
+            <kbd>{withMod("O")}</kbd>
           </button>
           <button role="menuitem" disabled={!canSave} onClick={() => pick(p.onSave)}>
             <span className="load-menu-name">{name ? `Save “${name}”` : "Save session…"}</span>
-            <kbd>⌘S</kbd>
+            <kbd>{withMod("S")}</kbd>
           </button>
           <button role="menuitem" disabled={!canSave} onClick={() => pick(p.onSaveAs)}>
             <span className="load-menu-name">Save session as…</span>
-            <kbd>⇧⌘S</kbd>
+            <kbd>{withMod("S", true)}</kbd>
           </button>
           <div className="session-menu-heading">Open recent</div>
           {recent.length === 0 && <div className="session-menu-empty">No recent sessions</div>}

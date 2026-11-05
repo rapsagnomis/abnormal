@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 import { SLOT_COUNT } from "../lib/api";
 import type { LaneVersions, TrackInfo } from "../lib/api";
 import { formatDuration } from "../lib/format";
+import { basename } from "../lib/paths";
 import { SourceMenu } from "./SourceMenu";
 
 const signed = (db: number) => `${db > 0 ? "+" : db < 0 ? "−" : ""}${Math.abs(db).toFixed(1)} dB`;
@@ -54,7 +55,7 @@ interface Props {
   onClose: () => void;
 }
 
-const fileName = (path: string) => path.split("/").pop() ?? path;
+const fileName = basename;
 
 /** The lane palette's hues (`--hue-N` in the CSS), offered for a song's colour. */
 const HUES = Array.from({ length: SLOT_COUNT }, (_, i) => `--hue-${i + 1}`);

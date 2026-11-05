@@ -76,6 +76,7 @@ fn search_in(dir: &Path, id: &Identity, depth: usize, seen: &mut usize, visited:
                 subdirs.push(path);
             }
         } else if kind.is_file()
+            && !in_trash(&path)
             && entry.metadata().is_ok_and(|m| m.len() == id.size)
             && identity(&path).as_ref() == Some(id)
         {
@@ -88,9 +89,12 @@ fn search_in(dir: &Path, id: &Identity, depth: usize, seen: &mut usize, visited:
     subdirs.into_iter().find_map(|sub| search_in(&sub, id, depth - 1, seen, visited))
 }
 
-/// A file in the Trash isn't one to relink to.
+/// A file in the Trash (or Windows' Recycle Bin) isn't one to relink to.
 fn in_trash(path: &Path) -> bool {
-    path.components().any(|c| c.as_os_str() == ".Trash" || c.as_os_str() == ".Trashes")
+    path.components().any(|c| {
+        let name = c.as_os_str().to_string_lossy();
+        name == ".Trash" || name == ".Trashes" || name.eq_ignore_ascii_case("$Recycle.Bin")
+    })
 }
 
 /// A bookmark to the file at `path` (base64), or None where bookmarks aren't available.

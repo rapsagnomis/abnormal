@@ -48,6 +48,8 @@ import { ZipExport } from "./components/ZipExport";
 import type { ZipTrack } from "./components/ZipExport";
 import { defaultName, VersionsDrawer } from "./components/VersionsDrawer";
 import { notesMarkdown } from "./lib/notes";
+import { basename, dirname, joinPath } from "./lib/paths";
+import { modKey, withMod } from "./lib/platform";
 import "./App.css";
 
 type Pair<T> = [T, T];
@@ -83,6 +85,7 @@ const NORMALIZE_PEAK_DBTP = -1;
 const RELINKED_NOTE_MS = 12000;
 /** The compared song has no reference (`subject`'s pair half when nothing is loaded for it). */
 const NO_REFERENCE = -1;
+const UNSUPPORTED = "Only mp3, flac, wav, aiff and m4a/aac files are supported";
 /** Files dropped or loaded as the session's default reference (the strip above the lanes). */
 const DEFAULT_TARGET = -2;
 /** Colour of a reference without a colourful cover. */
@@ -397,9 +400,11 @@ export default function App() {
    *  loop and zoom. */
   const loadFile = useCallback(async (slot: Slot, path: string, play = false, opts: { keepVersions?: boolean; switching?: boolean; at?: number } = {}) => {
     if (!isAudioFile(path)) {
-      setErrors((e) => setAt(e, slot, `Unsupported file type: ${path.split("/").pop()}`));
+      setErrors((e) => setAt(e, slot, `Unsupported file type: ${basename(path)}`));
       return;
     }
+    // A new song replaces the lane's (put back if the file can't be loaded: the old one stays).
+    const previousSong = latest.current.versions[slot];
     if (!opts.keepVersions) {
       const song = { name: "", versions: [path], front: 0 };
       latest.current.versions = setAt(latest.current.versions, slot, song);
@@ -440,7 +445,12 @@ export default function App() {
         await api.setPlaying(true);
       }
     } catch (err) {
+      if (seq !== loadSeq.current[slot]) return;
       setErrors((e) => setAt(e, slot, String(err)));
+      if (!opts.keepVersions) {
+        latest.current.versions = setAt(latest.current.versions, slot, previousSong);
+        setVersions((v) => setAt(v, slot, previousSong));
+      }
       return;
     } finally {
       setLoading((l) => setAt(l, slot, false));
@@ -465,7 +475,7 @@ export default function App() {
       const audio = paths.filter(isAudioFile);
       if (audio.length === 0) {
         if (paths.length) {
-          setErrors((e) => setAt(e, target ?? 0, "Only mp3, flac, wav, aiff and m4a/aac files are supported"));
+          setErrors((e) => setAt(e, target ?? 0, UNSUPPORTED));
         }
         return;
       }
@@ -1183,7 +1193,7 @@ export default function App() {
     const audio = paths.filter(isAudioFile);
     const song = latest.current.versions[slot];
     if (!audio.length) {
-      if (paths.length) setErrors((e) => setAt(e, slot, "Only mp3, flac, wav, aiff and m4a/aac files are supported"));
+      if (paths.length) setErrors((e) => setAt(e, slot, UNSUPPORTED));
       return;
     }
     if (!song) return;
@@ -1233,7 +1243,7 @@ export default function App() {
     const current = latest.current.tracks[slot];
     const song = latest.current.versions[slot] ?? (current ? { name: "", versions: [current.path], front: 0 } : null);
     if (!audio.length) {
-      if (paths.length) setErrors((e) => setAt(e, slot, "Only mp3, flac, wav, aiff and m4a/aac files are supported"));
+      if (paths.length) setErrors((e) => setAt(e, slot, UNSUPPORTED));
       return;
     }
     if (!song) return loadPaths(audio, slot);
@@ -1282,7 +1292,6 @@ export default function App() {
       const { color: _, ...song } = v[slot]!;
       return setAt(v, slot, color ? { ...song, color } : song);
     });
-  const folderOf = (path: string) => path.replace(/\/[^/]*$/, "");
 
   /** Replace every lane with these songs, in order (1, 2, then new lanes), stopped at the start,
    *  and the default reference with `defaultReference`. */
@@ -1355,9 +1364,9 @@ export default function App() {
     if (!songs.length) return;
     let path = as ? null : (session?.path ?? null);
     if (!path) {
-      const folder = folderOf(session?.path ?? songs[0].versions[songs[0].front]);
-      const name = session?.name ?? folder.split("/").pop() ?? "Session";
-      path = await save({ defaultPath: `${folder}/${name}.${SESSION_EXTENSION}`, filters: [{ name: "(a/b)normal session", extensions: [SESSION_EXTENSION] }] });
+      const folder = dirname(session?.path ?? songs[0].versions[songs[0].front]);
+      const name = session?.name ?? (basename(folder) || "Session");
+      path = await save({ defaultPath: joinPath(folder, `${name}.${SESSION_EXTENSION}`), filters: [{ name: "(a/b)normal session", extensions: [SESSION_EXTENSION] }] });
       if (!path) return;
       if (!isSessionFile(path)) path += `.${SESSION_EXTENSION}`;
     }
@@ -1386,9 +1395,9 @@ export default function App() {
       return current[s] ? [{ name: songName(s), version, track: current[s]!, markers: notes[s] }] : [];
     });
     if (!list.length) return;
-    const folder = folderOf(session?.path ?? list[0].track.path);
-    const title = session?.name ?? (list.length === 1 ? list[0].name : (folder.split("/").pop() ?? "Notes"));
-    let path = await save({ defaultPath: `${folder}/${title} notes.md`, filters: [{ name: "Markdown", extensions: ["md"] }] });
+    const folder = dirname(session?.path ?? list[0].track.path);
+    const title = session?.name ?? (list.length === 1 ? list[0].name : basename(folder) || "Notes");
+    let path = await save({ defaultPath: joinPath(folder, `${title} notes.md`), filters: [{ name: "Markdown", extensions: ["md"] }] });
     if (!path) return;
     if (!/\.md$/i.test(path)) path += ".md";
     try {
@@ -1403,13 +1412,13 @@ export default function App() {
   /** Export as Zip: ask where (beside the session, named after it), then write the zip. Its name
    *  is the album tag. */
   const exportZip = async (items: ZipItem[], format: ZipFormat, artist: string, cover: string | null, started: () => void): Promise<string | null> => {
-    const folder = folderOf(session?.path ?? items[0].source);
-    const name = session?.name ?? folder.split("/").pop() ?? "Tracks";
-    let path = await save({ defaultPath: `${folder}/${name}.zip`, filters: [{ name: "Zip archive", extensions: ["zip"] }] });
+    const folder = dirname(session?.path ?? items[0].source);
+    const name = session?.name ?? (basename(folder) || "Tracks");
+    let path = await save({ defaultPath: joinPath(folder, `${name}.zip`), filters: [{ name: "Zip archive", extensions: ["zip"] }] });
     if (!path) return null;
     if (!/\.zip$/i.test(path)) path += ".zip";
     started();
-    await api.exportZip(path, items, format, artist, path.split("/").pop()!.replace(/\.zip$/i, ""), cover);
+    await api.exportZip(path, items, format, artist, basename(path).replace(/\.zip$/i, ""), cover);
     return path;
   };
   /** What Export as Zip offers: each loaded lane's version in front, in lane order. */
@@ -1666,37 +1675,37 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // ⌘K opens and closes the library.
-      if (e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "k") {
+      // ⌘K opens and closes the library (Ctrl instead of ⌘ off the Mac, here and below).
+      if (modKey(e) && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setLibraryOpen((v) => !v);
         setVersionsOpen(null);
         return;
       }
       // ⌘N a new session, ⌘O open one, ⌘S save it, ⇧⌘S save it as.
-      if (e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "n") {
+      if (modKey(e) && !e.altKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
         sessionKeys.current.fresh();
         return;
       }
-      if (e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "o") {
+      if (modKey(e) && !e.altKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
         sessionKeys.current.open();
         return;
       }
-      if (e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "s") {
+      if (modKey(e) && !e.altKey && e.key.toLowerCase() === "s") {
         e.preventDefault();
         sessionKeys.current.save(e.shiftKey);
         return;
       }
       // ⌘← back to the start of the song, like Home.
-      if (e.metaKey && !e.ctrlKey && !e.altKey && e.key === "ArrowLeft") {
+      if (modKey(e) && !e.altKey && e.key === "ArrowLeft") {
         e.preventDefault();
         toStart();
         return;
       }
       // ⌘↑ / ⌘↓ listen to the loaded track above / below, in lane order (brought into view).
-      if (e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      if (modKey(e) && !e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         e.preventDefault();
         const { order: lanes, tracks: current, transport: tr } = latest.current;
         const loaded = lanes.filter((s) => current[s]);
@@ -1917,7 +1926,7 @@ export default function App() {
               className="session-relinked"
               onClick={() => setRelinked([])}
               title={`Found again (renamed or moved since the session was saved), and saved where they are now:\n${relinked
-                .map((r) => `${r.from.split("/").pop()} → ${r.to}`)
+                .map((r) => `${basename(r.from)} → ${r.to}`)
                 .join("\n")}\nClick to dismiss`}
             >
               ✓ Relinked {relinked.length} file{relinked.length === 1 ? "" : "s"}
@@ -1970,7 +1979,7 @@ export default function App() {
               setVersionsOpen(null);
             }}
             aria-expanded={libraryOpen}
-            title="Library: search your music and Deezer, find similar tracks (⌘K)"
+            title={`Library: search your music and Deezer, find similar tracks (${withMod("K")})`}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M4 19V5M8.5 19V5M13 19 11.5 5.5M16 19.5l3.5-13.5" />

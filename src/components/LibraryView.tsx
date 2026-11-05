@@ -2,6 +2,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Glide } from "./Glide";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { api, SLOTS } from "../lib/api";
 import { useFlip } from "../lib/motion";
 import { usePair } from "../lib/pair";
@@ -13,6 +14,7 @@ import { DeezerResults } from "./DeezerResults";
 import { LoadMenu, LoadTargetsContext } from "./LoadMenu";
 import { LibraryStanding } from "./LibraryStanding";
 import { fmt } from "../lib/metrics";
+import { modKey } from "../lib/platform";
 
 type Focus = "all" | "tonal" | "dynamics" | "stereo";
 
@@ -36,7 +38,7 @@ interface Props {
   paths: [string | null, string | null];
   status: LibraryStatus | null;
   onRescan: () => void;
-  /** Close the drawer it's shown in (Escape on an empty search, ⌘K). */
+  /** Close the drawer it's shown in (Escape on an empty search, ⌘K / Ctrl+K). */
   onClose: () => void;
 }
 
@@ -61,7 +63,7 @@ export function LibraryView({ reports, paths, status, onRescan, onClose }: Props
             if (query) setQuery("");
             else onClose();
           }
-          if (e.metaKey && e.key.toLowerCase() === "k") {
+          if (modKey(e) && e.key.toLowerCase() === "k") {
             e.preventDefault();
             onClose();
           }
@@ -211,15 +213,39 @@ function Matches({ reports, paths, status }: Omit<Props, "onRescan" | "onClose">
 }
 
 function LibraryLine({ status, onRescan }: { status: LibraryStatus | null; onRescan: () => void }) {
+  const [error, setError] = useState<string | null>(null);
   if (!status) return null;
   const progress = status.scanning && status.queued > 0 ? ` · analysing ${status.done} / ${status.queued}` : status.scanning ? " · scanning…" : "";
+  /** Pick the folder to index (the new status arrives as a `library-status` event). */
+  const chooseFolder = async () => {
+    const picked = await open({ directory: true, defaultPath: status.root || undefined, title: "Choose your music library folder" });
+    if (typeof picked !== "string") return;
+    api.setLibraryFolder(picked).then(
+      () => setError(null),
+      (e) => setError(String(e)),
+    );
+  };
+  if (!status.root) {
+    return (
+      <div className="library-line">
+        <span>
+          Choose the folder your music is in: it's analysed once, in the background, to find tracks that sound like yours.
+          {error && <span className="library-error"> · {error}</span>}
+        </span>
+        <button onClick={chooseFolder}>Choose folder…</button>
+      </div>
+    );
+  }
   return (
     <div className="library-line">
       <span title={status.root}>
         Library: {status.indexed.toLocaleString()} tracks{progress}
         {status.failed > 0 && <span className="unit"> · {status.failed} unreadable</span>}
-        {status.error && <span className="library-error"> · {status.error}</span>}
+        {(error ?? status.error) && <span className="library-error"> · {error ?? status.error}</span>}
       </span>
+      <button onClick={chooseFolder} disabled={status.scanning} title={`The library is ${status.root}: choose another folder`}>
+        Folder…
+      </button>
       <button onClick={onRescan} disabled={status.scanning} title={`Look for new or changed files in ${status.root}`}>
         Rescan
       </button>

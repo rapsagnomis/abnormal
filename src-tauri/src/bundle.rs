@@ -48,7 +48,7 @@ pub fn load_cover(path: &Path) -> Result<Cover> {
     let audio = path
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| ["mp3", "flac", "wav", "aif", "aiff", "m4a", "aac"].contains(&e.to_ascii_lowercase().as_str()));
+        .is_some_and(|e| crate::library::EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()));
     let data = if audio {
         decode::read_tags(path)?
             .cover
@@ -330,10 +330,34 @@ fn vorbis_comment(tags: &Tags) -> Vec<u8> {
     out
 }
 
+/// Sample rates MP3 can carry.
+const MP3_RATES: [u32; 9] = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
+
+/// A source MP3 can't carry as it is (high resolution), resampled: its first two channels at
+/// 44.1 kHz from that rate's multiples, else at 48 kHz. None when its rate will do.
+pub(crate) fn resampled_for_mp3(audio: &AudioData) -> Result<Option<AudioData>> {
+    use rubato::audioadapter_buffers::direct::SequentialSliceOfVecs;
+    use rubato::{Fft, FixedSync, Resampler};
+
+    if MP3_RATES.contains(&audio.sample_rate) {
+        return Ok(None);
+    }
+    let rate = if audio.sample_rate % 44100 == 0 { 44100 } else { 48000 };
+    let channels = audio.channels.len().min(2);
+    let frames = audio.frames();
+    let mut resampler = Fft::<f32>::new(audio.sample_rate as usize, rate as usize, 1024, channels, FixedSync::Both)?;
+    let input = SequentialSliceOfVecs::new(&audio.channels[..channels], channels, frames)?;
+    let interleaved = resampler.process_all(&input, frames, None)?.take_data();
+    let channels = (0..channels).map(|c| interleaved.iter().skip(c).step_by(channels).copied().collect()).collect();
+    Ok(Some(AudioData { sample_rate: rate, channels }))
+}
+
 /// 320 kb/s CBR MP3 (first two channels), with an ID3v2.4 tag.
 fn mp3(audio: &AudioData, tags: &Tags) -> Result<Vec<u8>> {
     use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushNoGap, MonoPcm, Quality, VbrMode, max_required_buffer_size};
 
+    let resampled = resampled_for_mp3(audio)?;
+    let audio = resampled.as_ref().unwrap_or(audio);
     let lame = |e: mp3lame_encoder::BuildError| anyhow!("MP3 encoder: {e}");
     let stereo = audio.channels.len() >= 2;
     let mut encoder = Builder::new()

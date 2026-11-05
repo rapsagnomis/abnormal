@@ -15,6 +15,7 @@ mod prepared;
 mod psycho;
 mod relink;
 mod sessions;
+mod settings;
 mod similarity;
 mod standing;
 mod spectrogram;
@@ -45,9 +46,6 @@ use similarity::Features;
 use peaks::Peaks;
 use player::{PlaybackBuffer, SLOTS, Shared, Transport};
 
-/// Library folder, relative to the home directory.
-const LIBRARY_DIR: &str = "Music/albums";
-
 /// Overview waveform resolution sent with each track. Enough for a full-width display on a
 /// large screen; zoomed views request finer peaks per range via `range_peaks`.
 const PEAK_BUCKETS: usize = 8192;
@@ -57,9 +55,11 @@ struct AppState {
     audio_error: Option<String>,
     /// Original-rate decoded audio, kept for analysis.
     tracks: Arc<Mutex<[Option<Arc<AudioData>>; SLOTS]>>,
-    /// Files opened via Finder ("Open With", double-click) not yet picked up by the UI, which
-    /// may not be listening yet on a cold launch.
+    /// Files opened via Finder or Explorer ("Open With", double-click) not yet picked up by the
+    /// UI, which may not be listening yet on a cold launch.
     opened: Mutex<Vec<String>>,
+    /// `settings.json` in the app data folder.
+    settings_path: PathBuf,
 }
 
 #[derive(Serialize, Clone)]
@@ -501,6 +501,28 @@ fn rescan_library(app: tauri::AppHandle, library: State<'_, Arc<Library>>) {
     std::thread::spawn(move || index_library(&library, &app));
 }
 
+/// Make `path` the library folder (remembered), where Deezer downloads go too, and index it.
+#[tauri::command]
+fn set_library_folder(
+    path: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    library: State<'_, Arc<Library>>,
+    downloads: State<'_, Arc<Downloads>>,
+) -> Result<library::Status, String> {
+    let folder = PathBuf::from(path);
+    if !folder.is_dir() {
+        return Err(format!("{} is not a folder", folder.display()));
+    }
+    settings::set_library_folder(&state.settings_path, &folder)?;
+    library.set_root(folder.clone());
+    downloads.deemix.set_music_dir(folder);
+    let status = library.status();
+    let _ = app.emit("library-status", &status);
+    rescan_when_idle(library.inner().clone(), app);
+    Ok(status)
+}
+
 fn index_library(library: &Library, app: &tauri::AppHandle) {
     library.index(&|status| {
         let _ = app.emit("library-status", status);
@@ -780,25 +802,40 @@ pub fn run() {
         eprintln!("audio output unavailable: {e}");
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Windows and Linux open files by starting the app with them as arguments: a second instance
+    // hands them to this one, which comes to the front.
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        open_files(app, file_args(args.into_iter().skip(1)));
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState {
-            player,
-            audio_error,
-            tracks: Arc::new(Mutex::new(std::array::from_fn(|_| None))),
-            opened: Mutex::new(Vec::new()),
-        })
-        .setup(|app| {
-            let root = app.path().home_dir()?.join(LIBRARY_DIR);
-            let db_path = app.path().app_data_dir()?.join("library.json");
-            let library = Arc::new(Library::new(root.clone(), db_path));
-            let deemix = Deemix::new(&app.path().home_dir()?, app.path().app_data_dir()?.join("deemix"), root);
+        .setup(move |app| {
+            let data = app.path().app_data_dir()?;
+            let home = app.path().home_dir().ok();
+            let settings_path = data.join("settings.json");
+            let root = settings::library_folder(&settings_path, home.as_deref());
+            app.manage(AppState {
+                player,
+                audio_error,
+                tracks: Arc::new(Mutex::new(std::array::from_fn(|_| None))),
+                // Files this launch was asked to open (Windows, Linux; macOS sends them as events).
+                opened: Mutex::new(if cfg!(target_os = "macos") { Vec::new() } else { file_args(std::env::args().skip(1)) }),
+                settings_path,
+            });
+            let library = Arc::new(Library::new(root.clone(), data.join("library.json")));
+            let deemix = Deemix::new(home.as_deref().unwrap_or(Path::new("")), data.join("deemix"), root);
             app.manage(Arc::new(Downloads { deemix, watching: AtomicBool::new(false) }));
             app.manage(library.clone());
-            app.manage(Arc::new(markers::Markers::new(app.path().app_data_dir()?.join("markers.json"))));
+            app.manage(Arc::new(markers::Markers::new(data.join("markers.json"))));
             app.manage(Arc::new(Versions::new()));
-            app.manage(Arc::new(sessions::Recents::new(app.path().app_data_dir()?.join("recent_sessions.json"))));
+            app.manage(Arc::new(sessions::Recents::new(data.join("recent_sessions.json"))));
             // Pick up tracks added since the last run.
             let handle = app.handle().clone();
             std::thread::spawn(move || index_library(&library, &handle));
@@ -831,6 +868,7 @@ pub fn run() {
             pro_q_template,
             library_status,
             rescan_library,
+            set_library_folder,
             similar_tracks,
             library_standing,
             search_library,
@@ -859,16 +897,25 @@ pub fn run() {
                     downloads.deemix.shutdown();
                 }
             }
-            // Files opened from Finder: queue them, and tell the UI to come and get them.
+            // Files opened from Finder.
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Opened { urls } => {
                 let paths = urls.iter().filter_map(|u| u.to_file_path().ok());
-                let paths: Vec<String> = paths.map(|p| p.to_string_lossy().into_owned()).collect();
-                if !paths.is_empty() {
-                    app.state::<AppState>().opened.lock().unwrap().extend(paths);
-                    let _ = app.emit("open-files", ());
-                }
+                open_files(app, paths.map(|p| p.to_string_lossy().into_owned()).collect());
             }
             _ => {}
         });
+}
+
+/// Queue files the OS asked us to open, and tell the UI to come and get them.
+fn open_files(app: &tauri::AppHandle, paths: Vec<String>) {
+    if !paths.is_empty() {
+        app.state::<AppState>().opened.lock().unwrap().extend(paths);
+        let _ = app.emit("open-files", ());
+    }
+}
+
+/// The command-line arguments that are files (the rest are flags for the webview or tooling).
+fn file_args(args: impl IntoIterator<Item = String>) -> Vec<String> {
+    args.into_iter().filter(|a| !a.starts_with('-') && Path::new(a).is_file()).collect()
 }

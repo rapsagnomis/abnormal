@@ -44,7 +44,12 @@ impl Db {
             return db;
         }
         // First format: { path: [markers] }.
-        let old: HashMap<String, Vec<Marker>> = serde_json::from_slice(&bytes).unwrap_or_default();
+        let Ok(old) = serde_json::from_slice::<HashMap<String, Vec<Marker>>>(&bytes) else {
+            // Unreadable (damaged, or from a newer version): set aside rather than overwritten by
+            // the next save, so the notes in it can still be recovered.
+            let _ = std::fs::rename(path, path.with_extension("json.unreadable"));
+            return Self::default();
+        };
         let tracks = old
             .into_iter()
             .map(|(path, markers)| (format!("{UNKNOWN_AUDIO}{path}"), Entry { paths: vec![path], markers }))

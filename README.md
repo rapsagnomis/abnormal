@@ -20,7 +20,7 @@ Built with [Tauri](https://tauri.app) — a Rust audio/analysis core and a React
 | EQ match | Up to 6 bell/shelf moves for A to approach B, with the needed vs. suggested curve |
 | Similar | Songs from your library that sound most like A or B — overall, or on tonal balance, dynamics or stereo only. Search the library by artist, album or title. Load any match or result into A or B |
 
-**Library**: every mp3, flac, wav, aiff and m4a/aac file under `~/Music/albums` (all subfolders) is analysed in the background and kept in a database (`library.json` in the app data folder). At each start only new or changed files are analysed, and deleted ones are dropped; *Rescan* in the Similar tab does the same on demand. The first run over a large library takes a while — matches fill in as it goes.
+**Library**: every mp3, flac, wav, aiff and m4a/aac file under the library folder (all subfolders; chosen with *Folder…* in the Library drawer, ⌘K / Ctrl+K) is analysed in the background and kept in a database (`library.json` in the app data folder). At each start only new or changed files are analysed, and deleted ones are dropped; *Rescan* does the same on demand. The first run over a large library takes a while — matches fill in as it goes.
 
 Curves can be overlaid on the waveforms: momentary or short-term loudness, PSR, or correlation (`C` cycles).
 
@@ -33,6 +33,25 @@ npm install
 npm run tauri dev     # development, with hot reload
 npm run tauri build   # release app in src-tauri/target/release/bundle/
 ```
+
+Universal macOS build (Apple Silicon and Intel; needs `rustup target add x86_64-apple-darwin`):
+
+```sh
+npm run build:mac          # with Deezer downloads
+npm run build:mac:shared   # without them, for builds given to others
+```
+
+Pushing a `v*` tag builds macOS and Windows installers on GitHub Actions (`.github/workflows/release.yml`); see `DISTRIBUTION.md` for signing.
+
+### Installing an unsigned build on another Mac
+
+Until builds are signed with a Developer ID, macOS says the app is damaged. After copying it to Applications, run once in Terminal:
+
+```sh
+xattr -cr /Applications/abnormal.app
+```
+
+On Windows, SmartScreen warns about an unknown publisher: *More info → Run anyway*.
 
 ## Tests
 

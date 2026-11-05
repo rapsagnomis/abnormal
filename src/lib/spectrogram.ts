@@ -37,8 +37,6 @@ const LUT: Uint8Array = (() => {
   return lut;
 })();
 
-export const byteToDb = (b: number) => SPECTROGRAM_FLOOR_DB + (b / 255) * -SPECTROGRAM_FLOOR_DB;
-
 /** Byte level near the top of the track's distribution, used as its display ceiling. */
 export function ceilingOf(data: Uint8Array): number {
   const counts = new Array<number>(256).fill(0);

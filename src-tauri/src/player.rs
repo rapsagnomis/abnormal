@@ -441,9 +441,9 @@ impl Mixer {
         let mut playing = shared.playing.load(Ordering::Relaxed);
         let mut active = shared.active.load(Ordering::Relaxed);
         let player_mode = shared.player_mode.load(Ordering::Relaxed);
-        let queue: Vec<usize> = (0..shared.queue_len.load(Ordering::Relaxed).min(SLOTS))
-            .map(|i| shared.queue[i].load(Ordering::Relaxed))
-            .collect();
+        // On the stack: nothing is allocated on the audio thread.
+        let queue: [usize; SLOTS] = std::array::from_fn(|i| shared.queue[i].load(Ordering::Relaxed));
+        let queue = &queue[..shared.queue_len.load(Ordering::Relaxed).min(SLOTS)];
         let looping: [bool; SLOTS] = std::array::from_fn(|i| shared.loop_enabled[i].load(Ordering::Relaxed));
         let alt_targets: [f32; SLOTS] = std::array::from_fn(|i| {
             let on = shared.alt_enabled[i].load(Ordering::Relaxed) && tracks[i].alt.is_some();
@@ -576,6 +576,42 @@ fn approach(current: f32, target: f32, step: f32) -> f32 {
     }
 }
 
+/// An output stream in the device's own sample format (WASAPI, ALSA and some interfaces don't
+/// default to f32): the mixer renders f32, converted on the way out where needed.
+fn output_stream(device: &cpal::Device, config: cpal::StreamConfig, format: cpal::SampleFormat, mut mixer: Mixer) -> Result<cpal::Stream> {
+    use cpal::SampleFormat as F;
+    Ok(match format {
+        F::F32 => device.build_output_stream::<f32, _, _>(config, move |data, _| mixer.render(data), report_stream_error, None)?,
+        F::F64 => converted_stream::<f64>(device, config, mixer)?,
+        F::I32 => converted_stream::<i32>(device, config, mixer)?,
+        F::I16 => converted_stream::<i16>(device, config, mixer)?,
+        F::U16 => converted_stream::<u16>(device, config, mixer)?,
+        other => return Err(anyhow!("unsupported output sample format {other:?}")),
+    })
+}
+
+fn converted_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(device: &cpal::Device, config: cpal::StreamConfig, mut mixer: Mixer) -> Result<cpal::Stream> {
+    // Grown to the largest buffer the device asks for, then reused.
+    let mut scratch: Vec<f32> = Vec::with_capacity(1 << 14);
+    let stream = device.build_output_stream::<T, _, _>(
+        config,
+        move |data: &mut [T], _| {
+            scratch.resize(data.len(), 0.0);
+            mixer.render(&mut scratch);
+            for (out, &s) in data.iter_mut().zip(&scratch) {
+                *out = T::from_sample(s);
+            }
+        },
+        report_stream_error,
+        None,
+    )?;
+    Ok(stream)
+}
+
+fn report_stream_error(err: cpal::Error) {
+    eprintln!("audio stream error: {err}");
+}
+
 /// Open the default output device and start the engine on a dedicated thread that owns the
 /// stream (cpal streams are not `Send` on every platform).
 pub fn start() -> (Arc<Shared>, Result<u32>) {
@@ -590,16 +626,13 @@ pub fn start() -> (Arc<Shared>, Result<u32>) {
                 let device = cpal::default_host()
                     .default_output_device()
                     .ok_or_else(|| anyhow!("no audio output device"))?;
-                let config: cpal::StreamConfig = device.default_output_config()?.into();
+                let supported = device.default_output_config()?;
+                let format = supported.sample_format();
+                let config: cpal::StreamConfig = supported.into();
                 let rate = config.sample_rate;
                 thread_shared.device_rate.store(rate, Ordering::Relaxed);
-                let mut mixer = Mixer::new(thread_shared.clone(), config.channels as usize, rate);
-                let stream = device.build_output_stream::<f32, _, _>(
-                    config,
-                    move |data, _| mixer.render(data),
-                    |err| eprintln!("audio stream error: {err}"),
-                    None,
-                )?;
+                let mixer = Mixer::new(thread_shared.clone(), config.channels as usize, rate);
+                let stream = output_stream(&device, config, format, mixer)?;
                 stream.play()?;
                 Ok((stream, rate))
             })();

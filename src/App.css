@@ -6,8 +6,9 @@
 }
 
 :root {
-  --font-display: "Blur Web", -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-text: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, sans-serif;
+  /* Segoe UI is Windows' system font (the generic sans-serif would be Arial there). */
+  --font-display: "Blur Web", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  --font-text: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", sans-serif;
 
   --bg: #121417;
   --panel: #1a1d22;
@@ -2266,6 +2267,9 @@ body.dragging-track * {
   gap: 6px 8px;
   font-size: 13px;
   color: var(--text-dim);
+}
+.library-line > span {
+  flex: 1;
 }
 .library-line button {
   padding: 2px 8px;

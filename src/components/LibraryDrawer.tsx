@@ -1,6 +1,7 @@
 import type { AnalysisReport, LibraryStatus } from "../lib/api";
 import { PairContext, pairColors } from "../lib/pair";
 import type { ComparedPair } from "../lib/pair";
+import { withMod } from "../lib/platform";
 import { LibraryView } from "./LibraryView";
 import { LoadTargetsContext } from "./LoadMenu";
 import type { LoadTargets } from "./LoadMenu";
@@ -27,7 +28,7 @@ export function LibraryDrawer(p: Props) {
         <aside className={`library-drawer${p.dragging ? " dragging" : ""}`} style={pairColors(p.pair.labels)} aria-label="Library">
           <header className="library-drawer-header">
             <h2>Library</h2>
-            <button className="library-drawer-close" onClick={p.onClose} title="Close the library (Esc, ⌘K)" aria-label="Close the library">
+            <button className="library-drawer-close" onClick={p.onClose} title={`Close the library (Esc, ${withMod("K")})`} aria-label="Close the library">
               ✕
             </button>
           </header>

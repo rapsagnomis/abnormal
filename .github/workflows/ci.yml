@@ -1,0 +1,32 @@
+# Typecheck the UI and run the Rust suite (synthetic-signal tests, no fixtures) on macOS and
+# Windows, with and without Deezer downloads.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      # `generate_context!` embeds the built UI, so it must exist before cargo builds the crate.
+      - run: npx vite build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: cargo check --manifest-path src-tauri/Cargo.toml --no-default-features

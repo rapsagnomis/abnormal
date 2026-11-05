@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { MOD, withMod } from "../lib/platform";
 
 /** Keys, then what they do, in groups. */
 const GROUPS: { title: string; keys: [string[], string][] }[] = [
@@ -8,7 +9,7 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
       [["Space"], "Play / pause"],
       [["←", "→"], "Back / forward 5 s"],
       [["⇧←", "⇧→"], "Back / forward 1 s"],
-      [["⌘←", "Home"], "Back to the start (or the loop's start)"],
+      [[withMod("←"), "Home"], "Back to the start (or the loop's start)"],
       [["L"], "Loop the selection"],
       [["P"], "Parallel ⇄ Player: tracks together, or one after another"],
     ],
@@ -18,7 +19,7 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
     keys: [
       [["Tab"], "Switch between the song and its reference"],
       [["1 – 8"], "Listen to track 1–8 (number row: & é \" ' … on AZERTY)"],
-      [["⌘↑", "⌘↓"], "Listen to the track above / below"],
+      [[withMod("↑"), withMod("↓")], "Listen to the track above / below"],
       [["K"], "Link the tracks: seek and loop them together"],
       [["N"], "Add a note at the playhead"],
     ],
@@ -29,7 +30,7 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
       [["M"], "Loudness match"],
       [["E"], "Audition the EQ match"],
       [["A"], "Show / hide the analysis panel"],
-      [["⌘K"], "Library"],
+      [[withMod("K")], "Library"],
     ],
   },
   {
@@ -39,7 +40,7 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
       [["C"], "Cycle the curve over the waveform"],
       [["+", "−"], "Zoom in / out"],
       [["0"], "Fit every track (à on AZERTY)"],
-      [["⌘ wheel"], "Zoom (or pinch)"],
+      [[`${MOD} wheel`], "Zoom (or pinch)"],
       [["⇧ wheel"], "Pan (or swipe sideways)"],
       [["Drag"], "Select a passage (⟳ on it loops it)"],
       [["Double-click", "Esc"], "Clear the selection"],
@@ -48,10 +49,10 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
   {
     title: "Sessions",
     keys: [
-      [["⌘N"], "New session"],
-      [["⌘O"], "Open a session"],
-      [["⌘S"], "Save the session"],
-      [["⇧⌘S"], "Save the session as…"],
+      [[withMod("N")], "New session"],
+      [[withMod("O")], "Open a session"],
+      [[withMod("S")], "Save the session"],
+      [[withMod("S", true)], "Save the session as…"],
       [["?"], "These shortcuts"],
     ],
   },

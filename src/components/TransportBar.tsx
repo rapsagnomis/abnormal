@@ -6,6 +6,7 @@ import type { Slot } from "../lib/api";
 import type { CurveMode } from "../lib/overlay";
 import type { Display } from "./Waveform";
 import { formatDuration } from "../lib/format";
+import { withMod } from "../lib/platform";
 
 interface Props {
   playing: boolean;
@@ -63,7 +64,7 @@ export function TransportBar(p: Props) {
     <footer className="transport">
       {/* Playback: how the playhead moves. */}
       <div className="transport-group">
-        <button onClick={p.onToStart} disabled={!any} title="Back to start (Home, ⌘←)">
+        <button onClick={p.onToStart} disabled={!any} title={`Back to start (Home, ${withMod("←")})`}>
           ⏮
         </button>
         <button className="play" onClick={p.onTogglePlay} disabled={!any} title="Play / pause (Space) · ← / → move 5 s (⇧ for 1 s)">

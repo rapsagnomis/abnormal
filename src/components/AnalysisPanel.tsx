@@ -3,6 +3,7 @@ import { Glide } from "./Glide";
 import type { AnalysisReport, EqFilter, MatchReport, Region } from "../lib/api";
 import { curveOf, describe, formatGain, formatHz, isSide, isWidth, midSideCurves, typeLabel } from "../lib/eq";
 import { formatTime } from "../lib/format";
+import { basename } from "../lib/paths";
 import { FADE_IN, flash } from "../lib/motion";
 import { pairColors, PairContext, usePair } from "../lib/pair";
 import type { ComparedPair } from "../lib/pair";
@@ -220,7 +221,7 @@ export function AnalysisPanel(p: Props) {
               rendering={p.fullRendering}
               passages={p.eqPassages}
               onListen={p.onListen}
-              names={p.paths.map((path) => path?.split("/").pop() ?? null) as [string | null, string | null]}
+              names={p.paths.map((path) => (path ? basename(path) : null)) as [string | null, string | null]}
             />
           </section>
         </>

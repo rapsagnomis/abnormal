@@ -30,6 +30,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": ["examples/**/*"],
     "fileAssociations": [
       { "ext": ["wav", "wave"], "name": "WAV audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["com.microsoft.waveform-audio"] },
       { "ext": ["flac"], "name": "FLAC audio", "role": "Viewer", "rank": "Alternate", "contentTypes": ["org.xiph.flac"] },

@@ -464,6 +464,8 @@ export const api = {
   saveSession: (path: string, lanes: LaneVersions[], defaultReference: string | null) =>
     invoke<Session>("save_session", { path, lanes, defaultReference }),
   openSession: (path: string) => invoke<Session>("open_session", { path }),
+  /** The example session bundled with the app (its `path` is empty: it's saved elsewhere). */
+  exampleSession: () => invoke<Session>("example_session"),
   recentSessions: () => invoke<RecentSession[]>("recent_sessions"),
   clearRecentSessions: () => invoke<void>("clear_recent_sessions"),
   /** Write the notes recap to a .md file. */

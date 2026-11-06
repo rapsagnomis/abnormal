@@ -34,6 +34,10 @@ interface Props {
   notesStatus: string | null;
   onExportZip: () => void;
   onShortcuts: () => void;
+  /** Show the Getting started tour again. */
+  onTour: () => void;
+  /** Replace the lanes with the bundled example session. */
+  onExample: () => void;
 }
 
 const MENU_WIDTH = 270;
@@ -167,6 +171,12 @@ export function AppMenu(p: Props) {
           <button role="menuitem" onClick={() => pick(p.onShortcuts)}>
             <span className="load-menu-name">Keyboard shortcuts</span>
             <kbd>?</kbd>
+          </button>
+          <button role="menuitem" onClick={() => pick(p.onTour)} title="A short tour of the app">
+            <span className="load-menu-name">Getting started</span>
+          </button>
+          <button role="menuitem" onClick={() => pick(p.onExample)} title="Two songs with their versions and references, to try the app with">
+            <span className="load-menu-name">Open example session</span>
           </button>
         </div>
       )}

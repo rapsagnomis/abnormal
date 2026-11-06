@@ -272,6 +272,45 @@ pub fn read(path: &Path) -> Result<Session, String> {
     Ok(Session { path: path.to_string_lossy().into_owned(), name: name_of(path), lanes, default_reference, relinked })
 }
 
+/// The example session shipped in the app's resources (`dir`, from `src-tauri/examples/`): two
+/// songs with their versions (oldest first, the latest in front), the first with a reference of
+/// its own, and a default reference. Files a build lacks are left out, so the third-party
+/// references can be dropped from `src-tauri/examples/` before builds are shared publicly.
+pub fn example(dir: &Path) -> Result<Session, String> {
+    let file = |rel: &str| Some(dir.join(rel)).filter(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned());
+    let song = |name: &str, versions: &[&str], references: &[&str]| {
+        let versions: Vec<String> = versions.iter().filter_map(|v| file(v)).collect();
+        Lane {
+            name: name.to_owned(),
+            front: versions.len().saturating_sub(1),
+            versions,
+            references: references.iter().filter_map(|r| file(r)).collect(),
+            ..Lane::default()
+        }
+    };
+    let lanes: Vec<Lane> = [
+        song(
+            "Le Chant Des Baleines",
+            &["baleines/baleines-v0.mp3", "baleines/baleines-11-03.mp3", "baleines/baleines-12-03.mp3"],
+            &["references/Men I Trust - Show Me How.mp3"],
+        ),
+        song("Merci d'avoir détruit ma vie", &["merci/merci-v0.mp3", "merci/merci-14-11-mstr-v1.mp3"], &[]),
+    ]
+    .into_iter()
+    .filter(|l| !l.versions.is_empty())
+    .collect();
+    if lanes.is_empty() {
+        return Err("This build doesn't include the example session".into());
+    }
+    Ok(Session {
+        path: String::new(),
+        name: "Example".into(),
+        lanes,
+        default_reference: file("references/Dijon - The Dress.mp3"),
+        relinked: Vec::new(),
+    })
+}
+
 pub struct Recents {
     path: PathBuf,
     list: Mutex<Option<Vec<RecentSession>>>,

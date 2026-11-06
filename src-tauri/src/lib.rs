@@ -604,6 +604,14 @@ async fn open_session(path: String, recents: State<'_, Arc<sessions::Recents>>) 
     .map_err(|e| e.to_string())?
 }
 
+/// The example session shipped with the app (not remembered as recent: it's opened from the
+/// menu or the tour, and saved elsewhere).
+#[tauri::command]
+fn example_session(app: tauri::AppHandle) -> Result<sessions::Session, String> {
+    let dir = app.path().resolve("examples", tauri::path::BaseDirectory::Resource).map_err(|e| e.to_string())?;
+    sessions::example(&dir)
+}
+
 /// Recently saved or opened sessions, most recent first.
 #[tauri::command]
 fn recent_sessions(recents: State<'_, Arc<sessions::Recents>>) -> Vec<sessions::RecentSession> {
@@ -883,6 +891,7 @@ pub fn run() {
             prepare_versions,
             version_loudness,
             open_session,
+            example_session,
             recent_sessions,
             clear_recent_sessions,
             write_notes,

@@ -23,5 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 
+# Example audio originals (the bundled copies are in src-tauri/examples/)
+/Examples/
+
 # Claude Code personal settings
 .claude/settings.local.json

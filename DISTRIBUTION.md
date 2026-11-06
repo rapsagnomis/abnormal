@@ -48,6 +48,11 @@ signing, a few hard-coded macOS paths, the Deemix integration, path handling in 
         or making it explicitly opt-in. → Cargo feature `deezer` (default on);
         `--no-default-features` removes it and the drawer's Deezer section. The release workflow
         builds without it unless the `INCLUDE_DEEZER` repository variable is `true`.
+      - [ ] Example session: `src-tauri/examples/references/` holds two commercial tracks (Dijon,
+        Men I Trust), bundled in every build and committed to the (private) repo. Before going
+        public: delete them (the example then opens without references) or use your own masters,
+        and purge them from git history (`git filter-repo --path src-tauri/examples/references
+        --invert-paths`) if the repo becomes public.
       - [ ] LAME (MP3 encoding, `mp3lame-encoder`): LGPL, compiled into the binary. Acknowledge it
         (About / licence notices) and keep the relinking obligation in mind.
 

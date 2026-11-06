@@ -43,6 +43,7 @@ import type { DragItem, LoadTargets } from "./components/LoadMenu";
 import { LibraryDrawer } from "./components/LibraryDrawer";
 import { AppMenu } from "./components/AppMenu";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
+import { Tour, tourSeen } from "./components/Tour";
 import { SourceMenu } from "./components/SourceMenu";
 import { ZipExport } from "./components/ZipExport";
 import type { ZipTrack } from "./components/ZipExport";
@@ -246,6 +247,8 @@ export default function App() {
   /** The Export as Zip panel and the keyboard shortcuts pop-up are open (from the app menu). */
   const [zipOpen, setZipOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  /** The Getting started tour: shown on the first launch, and from the app menu. */
+  const [tourOpen, setTourOpen] = useState(() => !tourSeen());
   /** Counts session saves, for the Session button's "Saved" feedback. */
   const [sessionSaves, setSessionSaves] = useState(0);
   /** Live analyser: the spectrum of what's playing now, while playing with the Tonal tab open. */
@@ -1350,6 +1353,23 @@ export default function App() {
       setErrors((err) => setAt(err, 0, String(e)));
     }
   };
+  /** The bundled example's folder (inside the app): never offered as where to save. */
+  const exampleRoot = useRef<string | null>(null);
+  /** Open the example session: like a session, but unsaved, so saving asks where. */
+  const openExample = async () => {
+    try {
+      const example = await api.exampleSession();
+      exampleRoot.current = dirname(dirname(example.lanes[0].versions[0]));
+      setSession(null);
+      setRelinked([]);
+      await replaceTracks(example.lanes, example.defaultReference);
+    } catch (e) {
+      setErrors((err) => setAt(err, 0, String(e)));
+    }
+  };
+  /** Where a save dialog starts: `name` in `folder`, unless that's the example's (in the app). */
+  const savePath = (folder: string, name: string) =>
+    exampleRoot.current && folder.startsWith(exampleRoot.current) ? name : joinPath(folder, name);
   const openSessionRef = useRef(openSessionPath);
   openSessionRef.current = openSessionPath;
 
@@ -1366,7 +1386,7 @@ export default function App() {
     if (!path) {
       const folder = dirname(session?.path ?? songs[0].versions[songs[0].front]);
       const name = session?.name ?? (basename(folder) || "Session");
-      path = await save({ defaultPath: joinPath(folder, `${name}.${SESSION_EXTENSION}`), filters: [{ name: "(a/b)normal session", extensions: [SESSION_EXTENSION] }] });
+      path = await save({ defaultPath: savePath(folder, `${name}.${SESSION_EXTENSION}`), filters: [{ name: "(a/b)normal session", extensions: [SESSION_EXTENSION] }] });
       if (!path) return;
       if (!isSessionFile(path)) path += `.${SESSION_EXTENSION}`;
     }
@@ -1397,7 +1417,7 @@ export default function App() {
     if (!list.length) return;
     const folder = dirname(session?.path ?? list[0].track.path);
     const title = session?.name ?? (list.length === 1 ? list[0].name : basename(folder) || "Notes");
-    let path = await save({ defaultPath: joinPath(folder, `${title} notes.md`), filters: [{ name: "Markdown", extensions: ["md"] }] });
+    let path = await save({ defaultPath: savePath(folder, `${title} notes.md`), filters: [{ name: "Markdown", extensions: ["md"] }] });
     if (!path) return;
     if (!/\.md$/i.test(path)) path += ".md";
     try {
@@ -1414,7 +1434,7 @@ export default function App() {
   const exportZip = async (items: ZipItem[], format: ZipFormat, artist: string, cover: string | null, started: () => void): Promise<string | null> => {
     const folder = dirname(session?.path ?? items[0].source);
     const name = session?.name ?? (basename(folder) || "Tracks");
-    let path = await save({ defaultPath: joinPath(folder, `${name}.zip`), filters: [{ name: "Zip archive", extensions: ["zip"] }] });
+    let path = await save({ defaultPath: savePath(folder, `${name}.zip`), filters: [{ name: "Zip archive", extensions: ["zip"] }] });
     if (!path) return null;
     if (!/\.zip$/i.test(path)) path += ".zip";
     started();
@@ -1919,6 +1939,8 @@ export default function App() {
             notesStatus={notesStatus}
             onExportZip={() => setZipOpen(true)}
             onShortcuts={() => setShortcutsOpen(true)}
+            onTour={() => setTourOpen(true)}
+            onExample={openExample}
           />
           <ZipExport open={zipOpen} onClose={() => setZipOpen(false)} tracks={zipTracks} onExport={exportZip} />
           {relinked.length > 0 && (
@@ -2157,6 +2179,7 @@ export default function App() {
       />
 
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+      {tourOpen && <Tour onClose={() => setTourOpen(false)} onExample={openExample} />}
 
       {dragging && (
         <div className="drag-ghost" style={{ left: dragging.x + 14, top: dragging.y + 10 }} aria-hidden="true">

@@ -3983,3 +3983,131 @@ button.versions-swatch.on:hover:not(:disabled) {
 .shortcuts .chart-note {
   margin: 0;
 }
+
+/* ── Getting started tour ── */
+
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  animation: fade-in 180ms ease-out;
+}
+/* The part a step describes, left lit; its huge shadow dims everything else. */
+.tour-spotlight {
+  position: fixed;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.55),
+    0 0 0 9999px rgba(6, 7, 9, 0.62);
+  pointer-events: none;
+  transition:
+    top 280ms cubic-bezier(0.3, 0.7, 0.3, 1),
+    left 280ms cubic-bezier(0.3, 0.7, 0.3, 1),
+    width 280ms cubic-bezier(0.3, 0.7, 0.3, 1),
+    height 280ms cubic-bezier(0.3, 0.7, 0.3, 1);
+}
+/* No part to point at: the whole window dims. */
+.tour-spotlight.none {
+  inset: 50% auto auto 50%;
+  width: 0;
+  height: 0;
+  box-shadow: 0 0 0 9999px rgba(6, 7, 9, 0.62);
+}
+.tour-card {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  outline: none;
+  animation: pop-in 180ms ease-out;
+}
+.tour-count {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tour-card h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+.tour-body p {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.tour-body p:last-child {
+  margin-bottom: 0;
+}
+.tour-body kbd {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--panel-raised);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.tour-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tour-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.tour-dots {
+  display: flex;
+  gap: 5px;
+}
+.tour-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 200ms ease;
+}
+.tour-dots span.on {
+  background: var(--text);
+}
+.tour-actions button {
+  padding: 4px 12px;
+  font-size: 13px;
+}
+.tour-actions .tour-skip {
+  margin-right: auto;
+  padding-left: 0;
+  background: none;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+.tour-next {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour,
+  .tour-card {
+    animation: none;
+  }
+  .tour-spotlight {
+    transition: none;
+  }
+}
